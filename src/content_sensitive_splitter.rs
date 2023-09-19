@@ -177,17 +177,23 @@ impl Splitter for ContentSensitiveSplitter {
     fn next_data(&mut self, buffer: Vec<u8>, handler: &mut dyn IoVecHandler) -> Result<()> {
         self.blocks.push_back(buffer);
 
+        println!("[{}:{}] Splitter:next_data entry, buffer added to DecQueue, current size= {}", file!(), line!(), self.blocks.len());
+
         while !self.eof() {
             let len = self.contiguous_size(&self.leading_c);
 
             let mut blocks = VecDeque::new();
             std::mem::swap(&mut self.blocks, &mut blocks);
             let consumes = self.next_data_(Self::ref_chunk(&blocks, &self.leading_c, len));
+
+            println!("[{}:{}] Number of elements returned from self.next_data_ = {} contig = {}", file!(), line!(), consumes.len(), len);
+
             std::mem::swap(&mut self.blocks, &mut blocks);
 
             self.unconsumed_len += len as u64;
 
             for consume_len in consumes {
+                println!("[{}:{}] Processing {} bytes in consumes", file!(), line!(), consume_len);
                 handler.handle_data(&self.consume(consume_len))?;
             }
             Self::inc_cursor(&self.blocks, &mut self.leading_c, len);

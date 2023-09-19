@@ -233,6 +233,7 @@ impl DedupHandler {
             self.data_written += v.len() as u64;
         }
         self.current_entries += 1;
+        println!("[{}:{}] We added a new entry for slab {}, entry {}", file!(), line!(), r.0, r.1);
         Ok(r)
     }
 
@@ -272,9 +273,13 @@ impl IoVecHandler for DedupHandler {
     fn handle_data(&mut self, iov: &IoVec) -> Result<()> {
         self.nr_chunks += 1;
         let len = iov_len_(iov);
+
+        println!("[{}:{}] DedupHandler:handle_data: amount = {}", file!(), line!(), len);
+
         self.mapped_size += len;
 
         if let Some(first_byte) = all_same(iov) {
+            println!("[{}:{}] DedupHandler:handle_data: all the same data!", file!(), line!());
             self.fill_size += len;
             self.add_stream_entry(
                 &MapEntry::Fill {
@@ -285,19 +290,30 @@ impl IoVecHandler for DedupHandler {
             )?;
             self.maybe_complete_stream()?;
         } else {
+
+            println!("[{}:{}] Calculating hashes for vector of bytes\n", file!(), line!());
+
             let h = hash_256_iov(iov);
+            println!("[{}:{}] Hash_256_iov len = {} value= {:?}", file!(), line!(), h.len(), h);
             let mini_hash = hash_64(&h);
+            // Would it be better to do this?
+            //let mini_hash = u64::from_le_bytes(mini_hash.into());
             let mut c = Cursor::new(&mini_hash);
             let mini_hash = c.read_u64::<LittleEndian>()?;
 
             let me: MapEntry;
+            println!("[{}:{}] self.current_slab = {}", file!(), line!(), self.current_slab);
             match self.seen.test_and_set(mini_hash, self.current_slab)? {
                 InsertResult::Inserted => {
+                    println!("[{}:{}] InsertResult::Inserted!", file!(), line!());
                     me = self.do_add(h, iov, len)?;
                 }
                 InsertResult::AlreadyPresent(s) => {
+                    println!("[{}:{}] InsertResult::AlreadyPresent!", file!(), line!());
                     if s == self.current_slab {
+                        println!("[{}:{}] s == self.current_slab {}", file!(), line!(), self.current_slab);
                         if let Some(offset) = self.current_index.lookup(&h) {
+                            println!("[{}:{}] self.current_index.lookup returned slab: {} - offset{} ", file!(), line!(), s, offset);
                             me = MapEntry::Data {
                                 slab: s,
                                 offset,
@@ -307,6 +323,7 @@ impl IoVecHandler for DedupHandler {
                             me = self.do_add(h, iov, len)?;
                         }
                     } else {
+                        println!("[{}:{}] Not the current slab", file!(), line!());
                         let hi = self.get_hash_index(s)?;
                         if let Some(offset) = hi.lookup(&h) {
                             me = MapEntry::Data {
@@ -321,6 +338,7 @@ impl IoVecHandler for DedupHandler {
                 }
             }
 
+            println!("[{}:{}] Adding map entry {:?} {}", file!(), line!(), me, len);
             self.add_stream_entry(&me, len)?;
             self.maybe_complete_stream()?;
         }
@@ -465,6 +483,9 @@ impl Packer {
             match chunk? {
                 Chunk::Mapped(buffer) => {
                     let len = buffer.len();
+
+                    println!("[{}:{}] Next 'chunk' from iterator:mapped len= {}, passing buffer to splitter", file!(), line!(), len);
+
                     splitter.next_data(buffer, &mut handler)?;
                     total_read += len as u64;
                     self.output
@@ -472,11 +493,13 @@ impl Packer {
                         .progress(((100 * total_read) / self.mapped_size) as u8);
                 }
                 Chunk::Unmapped(len) => {
+                    println!("[{}:{}] Chunk::Unmapped len {}", file!(), line!(), len);
                     assert!(len > 0);
                     splitter.next_break(&mut handler)?;
                     handler.handle_gap(len)?;
                 }
                 Chunk::Ref(len) => {
+                    println!("[{}:{}] Chunk::Ref len {}", file!(), line!(), len);
                     splitter.next_break(&mut handler)?;
                     handler.handle_ref(len)?;
                 }
