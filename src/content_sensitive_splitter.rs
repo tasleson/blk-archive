@@ -169,6 +169,14 @@ impl ContentSensitiveSplitter {
             }
         }
 
+        // If we haven't found any segments, lets consume this contiguous chunk.  We likely
+        // have a data stream that is a repeating pattern, e.g. all zeros.
+        // Note: The max length this can be is u32::MAX as we will assert in IndexBuilder if length
+        // exceeds this which is what will happen without this check.
+        if consumes.is_empty() {
+            consumes.push(data.len());
+        }
+
         consumes
     }
 }
