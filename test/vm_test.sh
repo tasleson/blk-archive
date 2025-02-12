@@ -23,7 +23,7 @@ new_path=$PATH:$(pwd)/target/release
 export PATH=$new_path
 
 if [ ! -d dmtest-python ]; then
-    git clone https://github.com/jthornber/dmtest-python.git || exit 1
+    git clone --single-branch --branch exit_code https://github.com/tasleson/dmtest-python.git || exit 1
 fi
 
 # Create the block devices if they don't already exist
