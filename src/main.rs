@@ -92,6 +92,13 @@ fn main_() -> Result<()> {
                         .long("data-cache-size-meg")
                         .value_name("DATA_CACHE_SIZE_MEG")
                         .num_args(1),
+                )
+                .arg(
+                    Arg::new("DISABLE_DATA_COMPRESSION")
+                        .help("Disable data compression (default is enabled)")
+                        .required(false)
+                        .long("disable-data-compression")
+                        .action(ArgAction::SetTrue),
                 ),
         )
         .subcommand(
