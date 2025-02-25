@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::args;
@@ -11,6 +13,19 @@ pub struct BlkArchive {
     archive: PathBuf,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct PackStats {
+    pub hashes_written: u64,
+    pub data_written: u64,
+    pub mapped_size: u64,
+    pub fill_size: u64,
+}
+#[derive(Deserialize, Serialize, Debug)]
+pub struct PackResponse {
+    pub stream_id: String,
+    pub stats: PackStats,
+}
+
 impl BlkArchive {
     pub fn new(archive: &Path) -> Result<Self> {
         Self::new_with(archive, 4096)
@@ -18,7 +33,13 @@ impl BlkArchive {
 
     pub fn new_with(archive: &Path, block_size: usize) -> Result<Self> {
         let bs_str = block_size.to_string();
-        run_ok(create_cmd(args!["-a", archive, "--block-size", &bs_str]))?;
+        run_ok(create_cmd(args![
+            "-a",
+            archive,
+            "--block-size",
+            &bs_str,
+            "--disable-data-compression"
+        ]))?;
         Ok(Self {
             archive: archive.to_path_buf(),
         })
@@ -28,6 +49,18 @@ impl BlkArchive {
         Ok(Self {
             archive: archive.to_path_buf(),
         })
+    }
+
+    pub fn data_hash_sizes(&self) -> std::io::Result<(u64, u64)> {
+        fn file_size(path: &PathBuf) -> std::io::Result<u64> {
+            fs::metadata(path).map(|meta| meta.len())
+        }
+
+        let base_path = self.archive.clone();
+        let data_size = file_size(&base_path.join("data/data"))?;
+        let hashes_size = file_size(&base_path.join("data/hashes"))?;
+
+        Ok((data_size, hashes_size))
     }
 
     pub fn pack_cmd(&self, input: &Path) -> Command {
@@ -41,6 +74,12 @@ impl BlkArchive {
             .as_str()
             .ok_or(anyhow!("stream_id not found"))?;
         Ok(sid.to_string())
+    }
+
+    pub fn pack_resp(&self, input: &Path) -> Result<PackResponse> {
+        let stdout = run_ok(self.pack_cmd(input))?;
+        let response: PackResponse = serde_json::from_str(&stdout)?;
+        Ok(response)
     }
 
     pub fn unpack_cmd(&self, stream: &str, output: &Path, create: bool) -> Command {
