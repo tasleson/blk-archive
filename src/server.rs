@@ -62,7 +62,7 @@ impl Server {
             SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?
         };
 
-        let da = Data::new(None)?;
+        let da = Data::new(None, None, None)?;
 
         let ipc_dir = if one_system {
             Some(ipc::create_unix_ipc_dir()?)

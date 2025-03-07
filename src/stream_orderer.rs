@@ -96,7 +96,7 @@ impl StreamOrder {
         if wait {
             while p.ready.is_empty() {
                 // Before we place ourselves to sleep, make sure we aren't done!
-                if Self::_complete(&p) == false {
+                if !Self::_complete(&p) {
                     p = cvar.wait(p).unwrap();
                 } else {
                     break;

@@ -63,7 +63,15 @@ impl<D: UnpackDest> Unpacker<D> {
         let da = if remote.is_some() {
             None
         } else {
-            Some(archive::Data::new(Some(cache_nr_entries))?)
+            let data_file = SlabFileBuilder::open(data_path())
+                .cache_nr_entries(cache_nr_entries as usize)
+                .build()?;
+            let hashes_file = Arc::new(Mutex::new(SlabFileBuilder::open(hashes_path()).build()?));
+            Some(archive::Data::new(
+                Some(cache_nr_entries),
+                Some(data_file),
+                Some(hashes_file),
+            )?)
         };
 
         Ok(Self {

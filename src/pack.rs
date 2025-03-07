@@ -75,7 +75,25 @@ impl DedupHandler {
                 .spawn(move || client.run())?;
             Tp::Remote(rq, Some(h))
         } else {
-            Tp::Local(archive::Data::new(None)?)
+            let data_file = SlabFileBuilder::open(data_path())
+                .write(true)
+                .queue_depth(128)
+                .build()
+                .context("couldn't open data slab file")?;
+
+            let hashes_file = Arc::new(Mutex::new(
+                SlabFileBuilder::open(hashes_path())
+                    .write(true)
+                    .queue_depth(16)
+                    .build()
+                    .context("couldn't open hashes slab file")?,
+            ));
+
+            Tp::Local(archive::Data::new(
+                None,
+                Some(data_file),
+                Some(hashes_file),
+            )?)
         };
 
         // Create the stream meta and store
