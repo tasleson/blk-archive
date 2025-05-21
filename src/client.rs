@@ -385,7 +385,7 @@ impl Client {
                             Sentry {
                                 e: removed.entry.unwrap(),
                                 len: None,
-                                data: None,
+                                data: Some(data),
                             },
                         );
                     }
