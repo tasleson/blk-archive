@@ -149,6 +149,7 @@ fn main_() -> Result<()> {
             Command::new("send")
                 .about("packs a stream into a remote archive")
                 .arg(server.clone())
+                .arg(data_cache_size.clone())
                 .arg(
                     Arg::new("INPUT")
                         .help("Specify a device or file to archive")
@@ -193,6 +194,7 @@ fn main_() -> Result<()> {
                         .action(ArgAction::SetTrue),
                 )
                 .arg(server.clone())
+                .arg(data_cache_size.clone())
                 .arg(stream_arg.clone()),
         )
         .subcommand(
@@ -243,6 +245,7 @@ fn main_() -> Result<()> {
         .subcommand(
             Command::new("server")
                 .about("run in daemon mode")
+                .arg(data_cache_size.clone())
                 .arg(archive_arg.clone()),
         )
         .get_matches();
@@ -283,7 +286,7 @@ fn main_() -> Result<()> {
         Some(("server", sub_matches)) => {
             let archive_dir =
                 Path::new(sub_matches.get_one::<String>("ARCHIVE").unwrap()).canonicalize()?;
-            let mut s = server::Server::new(matches, Some(&archive_dir), false)?;
+            let mut s = server::Server::new(sub_matches.clone(), Some(&archive_dir), false)?;
             s.0.run()?;
         }
         _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents 'None'"),
