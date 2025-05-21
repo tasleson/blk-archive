@@ -155,6 +155,26 @@ fn main_() -> Result<()> {
                         .help("Specify a device or file to archive")
                         .required(true)
                         .value_name("INPUT"),
+                )
+                .arg(
+                    Arg::new("DELTA_STREAM")
+                        .help(
+                            "Specify the stream that contains an older version of this thin device",
+                        )
+                        .required(false)
+                        .long("delta-stream")
+                        .value_name("DELTA_STREAM")
+                        .num_args(1),
+                )
+                .arg(
+                    Arg::new("DELTA_DEVICE")
+                        .help(
+                            "Specify the device that contains an older version of this thin device",
+                        )
+                        .required(false)
+                        .long("delta-device")
+                        .value_name("DELTA_DEVICE")
+                        .num_args(1),
                 ),
         )
         .subcommand(
