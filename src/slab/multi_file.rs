@@ -157,12 +157,9 @@ impl MultiFile {
     ) -> Result<Self> {
         let base_path = base_path.as_ref().to_path_buf();
 
-        println!("debug base_path = {:?}", base_path);
-
         // Create initial file (file_id = 0)
         let initial_file_path = file_id_to_path(&base_path, 0);
         if let Some(parent) = initial_file_path.parent() {
-            println!("DEBUG: {:?}", parent);
             std::fs::create_dir_all(parent)?;
         }
 
