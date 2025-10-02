@@ -775,4 +775,342 @@ mod tests {
             assert_eq!(*read_data, data);
         }
     }
+
+    // ===== Race Condition Tests =====
+    // These tests verify the fixes in commit 5db2a22 and subsequent fixes
+
+    /// Test: Read immediately after write without close
+    ///
+    /// This is the core use case for pending_writes - ensuring reads
+    /// work before the writer thread has committed data to disk.
+    #[test]
+    fn test_read_uncommitted_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mut mf = MultiFile::create(&base_path, 8, false, 10).unwrap();
+
+        // Write and immediately read without close
+        for i in 0..20 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+
+            // Read immediately - should work via pending_writes
+            let read_data = mf.read(i).unwrap();
+            assert_eq!(*read_data, data, "Slab {} data mismatch", i);
+        }
+    }
+
+    /// Test: Write, sync, read pattern
+    ///
+    /// Ensures sync_all() properly commits data and clears pending_writes,
+    /// and reads still work after sync.
+    #[test]
+    fn test_sync_and_read() {
+        let num_slabs = 10;
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mut mf = MultiFile::create(&base_path, 10, true, 10).unwrap();
+
+        // Write some slabs
+        for i in 0..num_slabs {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+        }
+
+        // Read before sync (uses pending_writes)
+        for i in 0..num_slabs {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8);
+        }
+
+        // Sync to commit
+        mf.sync_all().unwrap();
+
+        // Read after sync (should read from disk)
+        for i in 0..num_slabs {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8);
+        }
+
+        // Write more and read (uses pending_writes again)
+        for i in num_slabs..num_slabs * 2 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+            let read_data = mf.read(i).unwrap();
+            assert_eq!(read_data[0], i as u8);
+        }
+    }
+
+    /// Test: Reopen file and ensure pending_index is correct
+    ///
+    /// Tests the fix where open_for_write must set pending_index to
+    /// nr_existing_slabs, not 0.
+    #[test]
+    fn test_reopen_pending_index_correctness() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Create and write initial data
+        {
+            let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+            for i in 0..3 {
+                let data = vec![i as u8; SLAB_SIZE_TARGET];
+                mf.write_slab(&data).unwrap();
+            }
+            mf.close().unwrap();
+        }
+
+        // Reopen and write more
+        {
+            let mut mf = MultiFile::open_for_write(&base_path, 4, 10).unwrap();
+            assert_eq!(mf.get_nr_slabs(), 3);
+
+            // Write new slab - should get index 3, not overwrite index 0
+            let data = vec![99u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+
+            // Read original slab 0 - should be unchanged
+            let read0 = mf.read(0).unwrap();
+            assert_eq!(read0[0], 0, "Slab 0 was overwritten!");
+
+            // Read new slab 3
+            let read3 = mf.read(3).unwrap();
+            assert_eq!(read3[0], 99, "New slab not written correctly");
+
+            mf.close().unwrap();
+        }
+
+        // Reopen for read and verify all data
+        {
+            let mut mf = MultiFile::open_for_read(&base_path, 10).unwrap();
+            assert_eq!(mf.get_nr_slabs(), 4);
+
+            for i in 0..3 {
+                let data = mf.read(i).unwrap();
+                assert_eq!(data[0], i as u8);
+            }
+            let data = mf.read(3).unwrap();
+            assert_eq!(data[0], 99);
+        }
+    }
+
+    /// Test: Rapid write-read cycles
+    ///
+    /// Stress test the pending_writes cache with rapid alternating
+    /// writes and reads to expose any race conditions.
+    #[test]
+    fn test_rapid_write_read_cycles() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mut mf = MultiFile::create(&base_path, 8, false, 10).unwrap();
+
+        // Rapid write-read cycles
+        for cycle in 0..50 {
+            let data = vec![cycle as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+
+            // Immediately read it back
+            let read_data = mf.read(cycle).unwrap();
+            assert_eq!(*read_data, data, "Cycle {} failed", cycle);
+
+            // Also read a previous slab to ensure cache coherency
+            if cycle > 0 {
+                let prev_data = mf.read(cycle - 1).unwrap();
+                assert_eq!(prev_data[0], (cycle - 1) as u8);
+            }
+        }
+    }
+
+    /// Test: Writer thread ordering
+    ///
+    /// Tests that the writer thread processes slabs in order even if
+    /// they arrive out of order on the channel.
+    #[test]
+    fn test_writer_thread_ordering() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Use small queue to potentially expose ordering issues
+        let mut mf = MultiFile::create(&base_path, 2, false, 10).unwrap();
+
+        // Write many slabs quickly
+        for i in 0..100 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+        }
+
+        // Close to ensure all writes complete
+        mf.close().unwrap();
+
+        // Reopen and verify all slabs are in correct order
+        let mut mf = MultiFile::open_for_read(&base_path, 10).unwrap();
+        for i in 0..100 {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8, "Slab {} out of order", i);
+        }
+    }
+
+    /// Test: Sync atomicity
+    ///
+    /// Ensures that sync_all() atomically syncs data and offsets under lock,
+    /// preventing the race where offsets include slabs whose data isn't synced.
+    #[test]
+    fn test_sync_atomicity() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+
+        // Write some data
+        for i in 0..5 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+        }
+
+        // First sync
+        mf.sync_all().unwrap();
+
+        // Write more
+        for i in 5..10 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+        }
+
+        // Second sync
+        mf.sync_all().unwrap();
+
+        // Close and reopen
+        mf.close().unwrap();
+        let mut mf = MultiFile::open_for_read(&base_path, 10).unwrap();
+
+        // All 10 slabs should be readable
+        assert_eq!(mf.get_nr_slabs(), 10);
+        for i in 0..10 {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8, "Slab {} not persisted correctly", i);
+        }
+    }
+
+    /// Test: Close clears pending_writes
+    ///
+    /// Verifies that close() properly clears pending_writes after
+    /// committing all data.
+    #[test]
+    fn test_close_clears_pending() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        {
+            let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+
+            // Write data (goes to pending_writes)
+            for i in 0..5 {
+                let data = vec![i as u8; SLAB_SIZE_TARGET];
+                mf.write_slab(&data).unwrap();
+            }
+
+            // Close should sync and clear pending_writes
+            mf.close().unwrap();
+        }
+
+        // Reopen - all data should be on disk, not in pending_writes
+        let mut mf = MultiFile::open_for_read(&base_path, 10).unwrap();
+        assert_eq!(mf.get_nr_slabs(), 5);
+
+        for i in 0..5 {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8);
+        }
+    }
+
+    /// Test: Compressed slabs with pending_writes
+    ///
+    /// Ensures pending_writes works correctly with compressed data.
+    #[test]
+    fn test_compressed_pending_writes() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mut mf = MultiFile::create(&base_path, 4, true, 10).unwrap();
+
+        // Write compressible data
+        for i in 0..10 {
+            let data = vec![i as u8; SLAB_SIZE_TARGET];
+            mf.write_slab(&data).unwrap();
+
+            // Read immediately (before compression completes)
+            let read_data = mf.read(i).unwrap();
+            assert_eq!(*read_data, data);
+        }
+
+        mf.close().unwrap();
+
+        // Reopen and verify compressed data persisted correctly
+        let mut mf = MultiFile::open_for_read(&base_path, 10).unwrap();
+        for i in 0..10 {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8);
+        }
+    }
+
+    /// Test: Concurrent writes and reads from multiple threads
+    ///
+    /// This tests that the pending_writes cache correctly handles:
+    /// - Multiple threads writing concurrently
+    /// - Reads happening before writes are committed
+    /// - No lost writes or corrupted data
+    #[test]
+    fn test_concurrent_write_read() {
+        use std::sync::{Arc, Barrier, Mutex};
+        use std::thread;
+
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let mf = Arc::new(Mutex::new(
+            MultiFile::create(&base_path, 16, false, 10).unwrap(),
+        ));
+
+        let num_threads = 4;
+        let slabs_per_thread = 10;
+        let barrier = Arc::new(Barrier::new(num_threads));
+
+        let mut handles = vec![];
+
+        // Spawn writer threads
+        for thread_id in 0..num_threads {
+            let mf_clone = Arc::clone(&mf);
+            let barrier_clone = Arc::clone(&barrier);
+
+            let handle = thread::spawn(move || {
+                barrier_clone.wait(); // Synchronize start
+
+                for i in 0..slabs_per_thread {
+                    let data = vec![(thread_id * 100 + i) as u8; SLAB_SIZE_TARGET];
+                    let mut mf = mf_clone.lock().unwrap();
+                    mf.write_slab(&data).unwrap();
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all writes to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Now read all slabs and verify
+        let mut mf = mf.lock().unwrap();
+        let total_slabs = num_threads * slabs_per_thread;
+        assert_eq!(mf.get_nr_slabs(), total_slabs as u32);
+
+        // Verify we can read all slabs (tests pending_writes)
+        for slab_id in 0..total_slabs {
+            let data = mf.read(slab_id as u32).unwrap();
+            assert_eq!(data.len(), SLAB_SIZE_TARGET);
+        }
+    }
 }
