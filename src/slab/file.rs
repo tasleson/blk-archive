@@ -66,6 +66,7 @@ pub struct SlabFile {
     tid: Option<thread::JoinHandle<()>>,
 
     data_cache: DataCache,
+    pending_writes: std::collections::HashMap<SlabIndex, Arc<Vec<u8>>>,
 }
 
 impl Drop for SlabFile {
@@ -188,7 +189,7 @@ impl SlabFile {
         let offsets_path = offsets_path(&data_path);
 
         let mut data = OpenOptions::new()
-            .read(false)
+            .read(true)
             .write(true)
             .create(true)
             .truncate(true)
@@ -229,6 +230,7 @@ impl SlabFile {
             tx: Some(tx),
             tid: Some(tid),
             data_cache: DataCache::new(cache_nr_entries),
+            pending_writes: std::collections::HashMap::new(),
         })
     }
 
@@ -279,6 +281,7 @@ impl SlabFile {
             tx: Some(tx),
             tid: Some(tid),
             data_cache: DataCache::new(cache_nr_entries),
+            pending_writes: std::collections::HashMap::new(),
         })
     }
 
@@ -315,6 +318,7 @@ impl SlabFile {
             tx: None,
             tid: None,
             data_cache: DataCache::new(cache_nr_entries),
+            pending_writes: std::collections::HashMap::new(),
         })
     }
 
@@ -325,6 +329,9 @@ impl SlabFile {
         if let Some(tid) = tid {
             tid.join().expect("join failed");
         }
+
+        // Clear pending writes since all are now committed
+        self.pending_writes.clear();
 
         let shared = self.shared.lock().unwrap();
         shared.offsets.write_offset_file(&self.offsets_path)?;
@@ -365,9 +372,16 @@ impl SlabFile {
     }
 
     pub fn read(&mut self, slab: u32) -> Result<Arc<Vec<u8>>> {
+        // Check pending writes first (uncommitted data)
+        if let Some(data) = self.pending_writes.get(&(slab as u64)) {
+            return Ok(data.clone());
+        }
+
+        // Check cache
         if let Some(data) = self.data_cache.find(slab) {
             Ok(data)
         } else {
+            // Read from disk
             let data = Arc::new(self.read_(slab)?);
             self.data_cache.insert(slab, data.clone());
             Ok(data)
@@ -383,10 +397,19 @@ impl SlabFile {
 
     pub fn write_slab(&mut self, data: &[u8]) -> Result<()> {
         let (index, tx) = self.reserve_slab();
+
+        // Cache the uncompressed data for immediate reads
+        self.pending_writes.insert(index, Arc::new(data.to_vec()));
+
         tx.send(SlabData {
             index,
             data: data.to_vec(),
         })?;
+
+        // Cleanup: remove pending writes that have been committed to disk
+        let nr_slabs = self.get_nr_slabs() as u64;
+        self.pending_writes.retain(|&idx, _| idx >= nr_slabs);
+
         Ok(())
     }
 
