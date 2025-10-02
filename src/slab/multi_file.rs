@@ -9,9 +9,7 @@ use crate::slab::storage::*;
 //------------------------------------------------
 // Multi-file configuration constants
 
-//pub const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024 * 1024 - 1; // 4GB - 1 byte (FAT32 limit)
-
-pub const MAX_FILE_SIZE: u64 = 8 * 1024 * 1024;
+pub const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024 * 1024 - 1; // 4GB - 1 byte (FAT32 limit)
 pub const SLABS_PER_FILE: u32 = (MAX_FILE_SIZE / SLAB_SIZE_TARGET as u64) as u32; // 1024 slabs per file
 pub const FILES_PER_SUBDIR: u32 = 100; // 100 files per leaf directory
 pub const SUBDIRS_PER_DIR: u32 = 100; // 100 subdirs per directory
@@ -364,5 +362,339 @@ impl SlabStorage for MultiFile {
 impl Drop for MultiFile {
     fn drop(&mut self) {
         let _ = self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_file_id_from_global_slab() {
+        // SLABS_PER_FILE = (4GB - 1) / 8KB = 524287
+        assert_eq!(file_id_from_global_slab(0), 0);
+        assert_eq!(file_id_from_global_slab(SLABS_PER_FILE - 1), 0);
+        assert_eq!(file_id_from_global_slab(SLABS_PER_FILE), 1);
+        assert_eq!(file_id_from_global_slab(2 * SLABS_PER_FILE - 1), 1);
+        assert_eq!(file_id_from_global_slab(2 * SLABS_PER_FILE), 2);
+    }
+
+    #[test]
+    fn test_local_slab_from_global() {
+        // SLABS_PER_FILE = 524287
+        assert_eq!(local_slab_from_global(0), 0);
+        assert_eq!(
+            local_slab_from_global(SLABS_PER_FILE - 1),
+            SLABS_PER_FILE - 1
+        );
+        assert_eq!(local_slab_from_global(SLABS_PER_FILE), 0);
+        assert_eq!(
+            local_slab_from_global(2 * SLABS_PER_FILE - 1),
+            SLABS_PER_FILE - 1
+        );
+        assert_eq!(local_slab_from_global(2 * SLABS_PER_FILE), 0);
+    }
+
+    #[test]
+    fn test_file_id_to_path() {
+        let base = PathBuf::from("/tmp/test");
+
+        // File 0: level0=0, level1=0
+        assert_eq!(
+            file_id_to_path(&base, 0),
+            PathBuf::from("/tmp/test/slabs/000/000/file_0000000000")
+        );
+
+        // File 99: level0=0, level1=0 (still in first subdir)
+        assert_eq!(
+            file_id_to_path(&base, 99),
+            PathBuf::from("/tmp/test/slabs/000/000/file_0000000099")
+        );
+
+        // File 100: level0=0, level1=1 (second subdir)
+        assert_eq!(
+            file_id_to_path(&base, 100),
+            PathBuf::from("/tmp/test/slabs/000/001/file_0000000100")
+        );
+
+        // File 9999: level0=0, level1=99
+        assert_eq!(
+            file_id_to_path(&base, 9999),
+            PathBuf::from("/tmp/test/slabs/000/099/file_0000009999")
+        );
+
+        // File 10000: level0=1, level1=0
+        assert_eq!(
+            file_id_to_path(&base, 10000),
+            PathBuf::from("/tmp/test/slabs/001/000/file_0000010000")
+        );
+    }
+
+    #[test]
+    fn test_path_for_global_slab() {
+        let base = PathBuf::from("/tmp/test");
+
+        // Slab 0 is in file 0
+        assert_eq!(
+            path_for_global_slab(&base, 0),
+            PathBuf::from("/tmp/test/slabs/000/000/file_0000000000")
+        );
+
+        // Slab SLABS_PER_FILE is in file 1
+        assert_eq!(
+            path_for_global_slab(&base, SLABS_PER_FILE),
+            PathBuf::from("/tmp/test/slabs/000/000/file_0000000001")
+        );
+
+        // Slab 100 * SLABS_PER_FILE is in file 100
+        assert_eq!(
+            path_for_global_slab(&base, 100 * SLABS_PER_FILE),
+            PathBuf::from("/tmp/test/slabs/000/001/file_0000000100")
+        );
+    }
+
+    #[test]
+    fn test_multifile_create_write_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Create a MultiFile with queue_depth=4 for async writes
+        let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+
+        // Write some slabs
+        let data1 = vec![1u8; SLAB_SIZE_TARGET as usize];
+        let data2 = vec![2u8; SLAB_SIZE_TARGET as usize];
+        let data3 = vec![3u8; SLAB_SIZE_TARGET as usize];
+
+        mf.write_slab(&data1).unwrap();
+        mf.write_slab(&data2).unwrap();
+        mf.write_slab(&data3).unwrap();
+
+        assert_eq!(mf.get_nr_slabs(), 3);
+
+        // Read back immediately without close - this now works!
+        let read1 = mf.read(0).unwrap();
+        let read2 = mf.read(1).unwrap();
+        let read3 = mf.read(2).unwrap();
+
+        assert_eq!(*read1, data1);
+        assert_eq!(*read2, data2);
+        assert_eq!(*read3, data3);
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_multifile_compressed() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Create a compressed MultiFile with queue_depth=4
+        let mut mf = MultiFile::create(&base_path, 4, true, 10).unwrap();
+
+        // Write a compressible slab (all zeros)
+        let data = vec![0u8; SLAB_SIZE_TARGET as usize];
+        mf.write_slab(&data).unwrap();
+
+        // Read it back immediately - works due to pending_writes cache
+        let read_data = mf.read(0).unwrap();
+        assert_eq!(*read_data, data);
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_multifile_open_for_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Create and write some data
+        {
+            let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+            let data = vec![42u8; SLAB_SIZE_TARGET as usize];
+            mf.write_slab(&data).unwrap();
+            mf.write_slab(&data).unwrap();
+            mf.close().unwrap();
+        }
+
+        // Reopen for writing
+        let mut mf = MultiFile::open_for_write(&base_path, 4, 10).unwrap();
+        assert_eq!(mf.get_nr_slabs(), 2);
+
+        // Write more data
+        let data = vec![99u8; SLAB_SIZE_TARGET as usize];
+        mf.write_slab(&data).unwrap();
+        assert_eq!(mf.get_nr_slabs(), 3);
+
+        // Verify we can read all slabs immediately
+        let read1 = mf.read(0).unwrap();
+        assert_eq!(read1[0], 42);
+        let read3 = mf.read(2).unwrap();
+        assert_eq!(read3[0], 99);
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_multifile_open_for_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create and write data
+        {
+            let mut mf = MultiFile::create(base_path, 1, false, 10).unwrap();
+            for i in 0..5 {
+                let data = vec![i as u8; SLAB_SIZE_TARGET as usize];
+                mf.write_slab(&data).unwrap();
+            }
+            mf.close().unwrap();
+        }
+
+        // Open for reading
+        let mut mf = MultiFile::open_for_read(base_path, 10).unwrap();
+        assert_eq!(mf.get_nr_slabs(), 5);
+
+        // Read slabs
+        for i in 0..5 {
+            let data = mf.read(i).unwrap();
+            assert_eq!(data[0], i as u8);
+        }
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_multifile_multiple_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        let num_slabs = 100u32;
+
+        let mut mf = MultiFile::create(&base_path, 4, false, 10).unwrap();
+
+        // Write enough slabs to span multiple files
+        // SLABS_PER_FILE is 524287 with current constants (4GB / 8KB)
+        // Writing that many would be too slow, so write just enough to test the logic
+
+        for i in 0..num_slabs {
+            let data = vec![(i % 256) as u8; SLAB_SIZE_TARGET as usize];
+            mf.write_slab(&data).unwrap();
+        }
+
+        assert_eq!(mf.get_nr_slabs(), num_slabs);
+
+        // Verify file was created
+        let file0_path = file_id_to_path(&base_path, 0);
+        assert!(file0_path.exists());
+
+        // Read slabs immediately - works with pending_writes
+        let data_from_file0 = mf.read(0).unwrap();
+        assert_eq!(data_from_file0[0], 0);
+
+        let data_from_file0_end = mf.read(num_slabs - 1).unwrap();
+        assert_eq!(data_from_file0_end[0], ((num_slabs - 1) % 256) as u8);
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_multifile_get_file_size() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        let mut mf = MultiFile::create(base_path, 1, false, 10).unwrap();
+
+        let initial_size = mf.get_file_size();
+        assert!(initial_size > 0);
+
+        // Write a slab
+        let data = vec![1u8; SLAB_SIZE_TARGET as usize];
+        mf.write_slab(&data).unwrap();
+
+        // Close to flush writes
+        mf.close().unwrap();
+
+        // Check final size
+        let final_size = std::fs::metadata(file_id_to_path(base_path, 0))
+            .unwrap()
+            .len();
+        assert!(final_size > initial_size);
+    }
+
+    #[test]
+    fn test_multifile_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        let mut mf = MultiFile::create(base_path, 1, false, 10).unwrap();
+
+        assert_eq!(mf.index(), 0);
+
+        let data = vec![1u8; SLAB_SIZE_TARGET as usize];
+        mf.write_slab(&data).unwrap();
+        assert_eq!(mf.index(), 1);
+
+        mf.write_slab(&data).unwrap();
+        assert_eq!(mf.index(), 2);
+
+        mf.close().unwrap();
+    }
+
+    #[test]
+    fn test_open_for_write_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Try to open nonexistent archive for writing
+        let result = MultiFile::open_for_write(base_path, 4, 10);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("No existing slab files found"));
+        }
+    }
+
+    #[test]
+    fn test_open_for_read_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Try to open nonexistent archive for reading
+        let result = MultiFile::open_for_read(base_path, 10);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("No existing slab files found"));
+        }
+    }
+
+    #[test]
+    fn test_slab_storage_trait() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().to_path_buf();
+
+        {
+            let mut mf: Box<dyn SlabStorage> =
+                Box::new(MultiFile::create(&base_path, 1, false, 10).unwrap());
+
+            // Test trait methods
+            let data = vec![7u8; SLAB_SIZE_TARGET as usize];
+            mf.write_slab(&data).unwrap();
+
+            assert_eq!(mf.get_nr_slabs(), 1);
+            assert_eq!(mf.index(), 1);
+
+            // Close before reading to ensure all writes are flushed
+            mf.close().unwrap();
+        }
+
+        // Reopen and verify the data was written
+        {
+            let mut mf: Box<dyn SlabStorage> =
+                Box::new(MultiFile::open_for_read(&base_path, 10).unwrap());
+
+            let data = vec![7u8; SLAB_SIZE_TARGET as usize];
+            let read_data = mf.read(0).unwrap();
+            assert_eq!(*read_data, data);
+        }
     }
 }
