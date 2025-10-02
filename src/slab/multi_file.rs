@@ -429,6 +429,14 @@ mod tests {
             file_id_to_path(&base, 10000),
             PathBuf::from("/tmp/test/slabs/001/000/file_0000010000")
         );
+
+        // File u32::MAX: maximum possible file_id
+        // level0 = 4294967295 / 10000 = 429496
+        // level1 = (4294967295 / 100) % 100 = 72
+        assert_eq!(
+            file_id_to_path(&base, u32::MAX),
+            PathBuf::from("/tmp/test/slabs/429496/072/file_4294967295")
+        );
     }
 
     #[test]
@@ -451,6 +459,16 @@ mod tests {
         assert_eq!(
             path_for_global_slab(&base, 100 * SLABS_PER_FILE),
             PathBuf::from("/tmp/test/slabs/000/001/file_0000000100")
+        );
+
+        // Slab u32::MAX: maximum possible global_slab
+        // SLABS_PER_FILE = (4GB-1) / 4MB = 1023
+        // file_id = 4294967295 / 1023 = 4198404
+        // level0 = 4198404 / 10000 = 419
+        // level1 = (4198404 / 100) % 100 = 84
+        assert_eq!(
+            path_for_global_slab(&base, u32::MAX),
+            PathBuf::from("/tmp/test/slabs/419/084/file_0004198404")
         );
     }
 
