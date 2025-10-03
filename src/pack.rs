@@ -11,6 +11,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::archive::*;
 use crate::chunkers::*;
@@ -20,6 +21,7 @@ use crate::hash::*;
 use crate::iovec::*;
 use crate::output::Output;
 use crate::paths::*;
+use crate::recovery;
 use crate::run_iter::*;
 use crate::slab::builder::*;
 use crate::slab::*;
@@ -70,23 +72,23 @@ struct DedupStats {
     fill_size: u64,
 }
 
-struct DedupHandler<S: SlabStorage = SlabFile> {
+struct DedupHandler<'a, S: SlabStorage = SlabFile<'static>> {
     nr_chunks: usize,
 
-    stream_file: SlabFile,
+    stream_file: SlabFile<'a>,
     stream_buf: Vec<u8>,
 
     mapping_builder: Arc<Mutex<dyn Builder>>,
 
     stats: DedupStats,
-    archive: Data<S>,
+    archive: Data<'a, S>,
 }
 
-impl<S: SlabStorage> DedupHandler<S> {
+impl<'a, S: SlabStorage> DedupHandler<'a, S> {
     fn new(
-        stream_file: SlabFile,
+        stream_file: SlabFile<'a>,
         mapping_builder: Arc<Mutex<dyn Builder>>,
-        archive: Data<S>,
+        archive: Data<'a, S>,
     ) -> Result<Self> {
         let stats = DedupStats::default();
 
@@ -135,7 +137,7 @@ impl<S: SlabStorage> DedupHandler<S> {
     }
 }
 
-impl<S: SlabStorage> IoVecHandler for DedupHandler<S> {
+impl<'a, S: SlabStorage> IoVecHandler for DedupHandler<'a, S> {
     fn handle_data(&mut self, iov: &IoVec) -> Result<()> {
         self.nr_chunks += 1;
         let len = iov_len_(iov);
@@ -185,22 +187,26 @@ impl<S: SlabStorage> IoVecHandler for DedupHandler<S> {
 //-----------------------------------------
 
 // Assumes we've chdir'd to the archive
-fn new_stream_path_(rng: &mut ChaCha20Rng) -> Result<Option<(String, PathBuf)>> {
+// Returns (stream_id, temp_path, final_path)
+fn new_stream_path_(rng: &mut ChaCha20Rng) -> Result<Option<(String, PathBuf, PathBuf)>> {
     // choose a random number
     let n: u64 = rng.gen();
 
     // turn this into a path
     let name = format!("{:>016x}", n);
-    let path: PathBuf = ["streams", &name].iter().collect();
+    let temp_name = format!(".tmp_{}", name);
+    let temp_path: PathBuf = ["streams", &temp_name].iter().collect();
+    let final_path: PathBuf = ["streams", &name].iter().collect();
 
-    if path.exists() {
+    // Check both temp and final paths don't exist
+    if temp_path.exists() || final_path.exists() {
         Ok(None)
     } else {
-        Ok(Some((name, path)))
+        Ok(Some((name, temp_path, final_path)))
     }
 }
 
-fn new_stream_path() -> Result<(String, PathBuf)> {
+fn new_stream_path() -> Result<(String, PathBuf, PathBuf)> {
     let mut rng = ChaCha20Rng::from_entropy();
     loop {
         if let Some(r) = new_stream_path_(&mut rng)? {
@@ -222,6 +228,7 @@ struct Packer {
     block_size: usize,
     thin_id: Option<u32>,
     hash_cache_size_meg: usize,
+    sync_point_secs: u64,
 }
 
 impl Packer {
@@ -237,6 +244,7 @@ impl Packer {
         block_size: usize,
         thin_id: Option<u32>,
         hash_cache_size_meg: usize,
+        sync_point_secs: u64,
     ) -> Self {
         Self {
             output,
@@ -249,10 +257,11 @@ impl Packer {
             block_size,
             thin_id,
             hash_cache_size_meg,
+            sync_point_secs,
         }
     }
 
-    fn pack(mut self, hashes_file: Arc<Mutex<SlabFile>>) -> Result<()> {
+    fn pack(mut self, hashes_file: Arc<Mutex<SlabFile<'static>>>) -> Result<()> {
         let mut splitter = ContentSensitiveSplitter::new(self.block_size as u32);
 
         let hashes_per_slab = std::cmp::max(SLAB_SIZE_TARGET / self.block_size, 1);
@@ -262,9 +271,11 @@ impl Packer {
 
         let data_file = MultiFile::open_for_write(data_path(), 128, slab_capacity)?;
 
-        let (stream_id, mut stream_path) = new_stream_path()?;
+        let (stream_id, temp_stream_dir, final_stream_dir) = new_stream_path()?;
 
-        std::fs::create_dir(stream_path.clone())?;
+        // Create temporary stream directory
+        std::fs::create_dir(&temp_stream_dir)?;
+        let mut stream_path = temp_stream_dir.clone();
         stream_path.push("stream");
 
         let stream_file = SlabFileBuilder::create(stream_path)
@@ -283,6 +294,9 @@ impl Packer {
         let start_time: DateTime<Utc> = Utc::now();
 
         let mut total_read = 0u64;
+        let mut last_checkpoint_time = Instant::now();
+        let checkpoint_interval = Duration::from_secs(self.sync_point_secs);
+
         for chunk in &mut self.it {
             match chunk? {
                 Chunk::Mapped(buffer) => {
@@ -302,6 +316,20 @@ impl Packer {
                     splitter.next_break(&mut handler)?;
                     handler.handle_ref(len)?;
                 }
+            }
+
+            // Check if it's time to create a checkpoint (at slab boundaries)
+            if handler.archive.slab_just_completed()
+                && last_checkpoint_time.elapsed() >= checkpoint_interval
+            {
+                handler.archive.sync_checkpoint()?;
+                let cwd = std::env::current_dir()?;
+                let data_slab_file_id =
+                    handler.archive.get_nr_data_slabs() / crate::slab::multi_file::SLABS_PER_FILE;
+                let checkpoint_path = cwd.join(recovery::check_point_file());
+                let checkpoint = recovery::create_checkpoint_from_files(&cwd, data_slab_file_id)?;
+                checkpoint.write(checkpoint_path)?;
+                last_checkpoint_time = Instant::now();
             }
         }
 
@@ -361,7 +389,12 @@ impl Packer {
             ));
         }
 
-        // write the stream config
+        // Write stream config to temp directory
+        let temp_stream_id = temp_stream_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid temp stream directory"))?;
+
         let cfg = config::StreamConfig {
             name: Some(self.stream_name.to_string()),
             source_path: self.input_path.display().to_string(),
@@ -371,7 +404,27 @@ impl Packer {
             packed_size: handler.stats.data_written + stream_written,
             thin_id: self.thin_id,
         };
-        config::write_stream_config(&stream_id, &cfg)?;
+        config::write_stream_config(temp_stream_id, &cfg)?;
+
+        // Create final checkpoint after successful pack
+        handler.archive.sync_checkpoint()?;
+        let cwd = std::env::current_dir()?;
+        let data_slab_file_id =
+            handler.archive.get_nr_data_slabs() / crate::slab::multi_file::SLABS_PER_FILE;
+        let checkpoint_path = cwd.join(recovery::check_point_file());
+        let checkpoint = recovery::create_checkpoint_from_files(&cwd, data_slab_file_id)?;
+        checkpoint.write(checkpoint_path)?;
+
+        // Atomically move temp stream directory to final location
+        // This is the commit point - either the stream exists completely or not at all
+        std::fs::rename(&temp_stream_dir, &final_stream_dir).with_context(|| {
+            format!(
+                "Failed to atomically commit stream directory: {:?} -> {:?}",
+                temp_stream_dir, final_stream_dir
+            )
+        })?;
+
+        //TODO: Sync stream directory?
 
         Ok(())
     }
@@ -384,6 +437,7 @@ fn thick_packer(
     input_file: &Path,
     input_name: String,
     config: &config::Config,
+    sync_point_secs: u64,
 ) -> Result<Packer> {
     let input_size = thinp::file_utils::file_size(input_file)?;
 
@@ -403,6 +457,7 @@ fn thick_packer(
         config.block_size,
         thin_id,
         config.hash_cache_size_meg,
+        sync_point_secs,
     ))
 }
 
@@ -411,6 +466,7 @@ fn thin_packer(
     input_file: &Path,
     input_name: String,
     config: &config::Config,
+    sync_point_secs: u64,
 ) -> Result<Packer> {
     let input = OpenOptions::new()
         .read(true)
@@ -447,16 +503,18 @@ fn thin_packer(
         config.block_size,
         thin_id,
         config.hash_cache_size_meg,
+        sync_point_secs,
     ))
 }
 
 // FIXME: slow
-fn open_thin_stream(stream_id: &str) -> Result<SlabFile> {
+fn open_thin_stream(stream_id: &str) -> Result<SlabFile<'static>> {
     SlabFileBuilder::open(stream_path(stream_id))
         .build()
         .context("couldn't open old stream file")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn thin_delta_packer(
     output: Arc<Output>,
     input_file: &Path,
@@ -464,7 +522,8 @@ fn thin_delta_packer(
     config: &config::Config,
     delta_device: &Path,
     delta_id: &str,
-    hashes_file: Arc<Mutex<SlabFile>>,
+    hashes_file: Arc<Mutex<SlabFile<'static>>>,
+    sync_point_secs: u64,
 ) -> Result<Packer> {
     let input = OpenOptions::new()
         .read(true)
@@ -508,6 +567,7 @@ fn thin_delta_packer(
         config.block_size,
         thin_id,
         config.hash_cache_size_meg,
+        sync_point_secs,
     ))
 }
 
@@ -540,7 +600,10 @@ pub fn run(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
         .to_string();
     let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap()).canonicalize()?;
 
-    env::set_current_dir(archive_dir)?;
+    let sync_point_secs = *matches.get_one::<u64>("SYNC_POINT_SECS").unwrap_or(&15u64);
+
+    env::set_current_dir(&archive_dir)?;
+
     let config = config::read_config(".", matches)?;
 
     output
@@ -564,11 +627,24 @@ pub fn run(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
             &delta_device,
             &delta_stream,
             hashes_file.clone(),
+            sync_point_secs,
         )?
     } else if is_thin_device(&input_file)? {
-        thin_packer(output.clone(), &input_file, input_name, &config)?
+        thin_packer(
+            output.clone(),
+            &input_file,
+            input_name,
+            &config,
+            sync_point_secs,
+        )?
     } else {
-        thick_packer(output.clone(), &input_file, input_name, &config)?
+        thick_packer(
+            output.clone(),
+            &input_file,
+            input_name,
+            &config,
+            sync_point_secs,
+        )?
     };
 
     output
