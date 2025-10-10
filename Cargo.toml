@@ -44,5 +44,9 @@ tempfile = "3.16"
 [features]
 skip_cleanup = []
 
+[[bin]]
+name = "slab-verify"
+path = "src/bin/slab_verify.rs"
+
 [profile.release]
 debug = 1
