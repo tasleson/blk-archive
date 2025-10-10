@@ -457,10 +457,17 @@ impl<'a> SlabFile<'a> {
     /// Ensures the file and offsets are synced to persistent storage.
     /// Writer thread remains alive for future writes.
     pub fn sync_all(&mut self) -> Result<()> {
+        // If no writer thread (read-only mode), nothing to sync
+        if self.tx.is_none() {
+            return Ok(());
+        }
+
         let target = {
             let (lock, _) = &*self.shared;
             let sh = lock.lock().unwrap();
-            if self.pending_index == 0 {
+            // Skip sync if nothing new has been written since opening
+            // This happens when we open_for_write but don't actually write any new slabs
+            if self.pending_index == sh.progress.last_submitted {
                 None
             } else {
                 Some(sh.progress.last_submitted)
