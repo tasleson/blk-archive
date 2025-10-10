@@ -54,8 +54,8 @@ impl SlabOffsets<'_> {
 
         let len = f.metadata()?.len();
 
-        // Empty file: start fresh.
-        if len == 0 {
+        // Only if we were asked to truncate will be return a new instance, else we bail
+        if len == 0 && truncate {
             return Ok(Self {
                 path,
                 map: None,
@@ -307,7 +307,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let offsets_path = temp_dir.path().join("test.offsets");
 
-        let offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+        let offsets = SlabOffsets::open(&offsets_path, true).unwrap();
 
         assert_eq!(offsets.len(), 0);
         assert!(offsets.is_empty());
@@ -318,7 +318,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let offsets_path = temp_dir.path().join("test.offsets");
 
-        let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+        let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
 
         // Append some offsets
         offsets.append(100);
@@ -342,7 +342,7 @@ mod tests {
 
         // Create and write offsets
         {
-            let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
             offsets.append(1024);
             offsets.append(2048);
             offsets.append(4096);
@@ -366,7 +366,7 @@ mod tests {
 
         // Create initial offsets
         {
-            let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
             offsets.append(100);
             offsets.append(200);
             offsets.write_offset_file(true).unwrap();
@@ -402,7 +402,7 @@ mod tests {
 
         // Create initial offsets
         {
-            let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
             offsets.append(100);
             offsets.append(200);
             offsets.write_offset_file(true).unwrap();
@@ -421,7 +421,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let offsets_path = temp_dir.path().join("test.offsets");
 
-        let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+        let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
 
         // Append many offsets without writing
         for i in 0..100 {
@@ -453,7 +453,7 @@ mod tests {
 
         // Create and write valid offsets
         {
-            let mut offsets = SlabOffsets::open(&offsets_path, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path, true).unwrap();
             offsets.append(1000);
             offsets.append(2000);
             offsets.write_offset_file(true).unwrap();
@@ -529,7 +529,7 @@ mod tests {
 
         // Create and write valid offsets
         {
-            let mut offsets = SlabOffsets::open(&offsets_path_reference, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path_reference, true).unwrap();
             offsets.append(1000);
             offsets.append(2000);
             offsets.append(3000);
@@ -538,7 +538,7 @@ mod tests {
         }
 
         {
-            let mut offsets = SlabOffsets::open(&offsets_path_expected_match, false).unwrap();
+            let mut offsets = SlabOffsets::open(&offsets_path_expected_match, true).unwrap();
             offsets.append(1000);
             offsets.append(2000);
             offsets.write_offset_file(false).unwrap();

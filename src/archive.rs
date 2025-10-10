@@ -444,24 +444,45 @@ pub fn flight_check<P: AsRef<std::path::Path>>(archive_path: P) -> Result<()> {
         drop(data_offsets);
         drop(hashes_offsets);
 
-        // Try regenerating both to be sure
+        // Try regenerating both to be sure, regenerating index files is safe.
         let mut data_offsets = crate::slab::regenerate_index(data_path, None)?;
         let mut hashes_offsets = crate::slab::regenerate_index(hashes_path, None)?;
 
-        let data_count = data_offsets.len();
         let hashes_count = hashes_offsets.len();
 
-        if data_count != hashes_count {
-            return Err(anyhow::anyhow!(
-                "Slab count mismatch after offsets regeneration: data file has {} slabs, hashes file has {} slabs",
+        data_offsets.write_offset_file(true)?;
+        hashes_offsets.write_offset_file(true)?;
+
+        // We need to compare the count of all slabs across all the data files to the hashes file
+        //
+        // TODO: We may also have to go back through the slab files fixing up the index files.
+        // because if the error exists in anyone of them, our numbers won't match
+        let base_path = archive_path
+            .as_ref()
+            .iter()
+            .as_path()
+            .join(paths::data_path());
+        let data_mf = MultiFile::open_for_read(base_path.clone(), 0)?;
+        let data_count = data_mf.get_nr_slabs();
+        drop(data_mf);
+
+        if data_count as usize != hashes_count {
+            // if we get here, we need to walk all the data slab files and regen all of the index
+            // files.  When that is done we will fetch the number of data slabs and if it doesn't
+            // match the hash slab count, the archive is in a bad state.
+            MultiFile::fix_data_file_slab_indexes(&base_path)?;
+
+            let data_mf = MultiFile::open_for_read(base_path.clone(), 0)?;
+            let data_count = data_mf.get_nr_slabs();
+
+            if data_count as usize != hashes_count {
+                return Err(anyhow::anyhow!(
+                "Slab count mismatch after offsets for all slab files regenerated: data file has {} slabs, hashes file has {} slabs",
                 data_count,
                 hashes_count
             ));
+            }
         }
-
-        // Counts match after regeneration, write the new index files
-        data_offsets.write_offset_file(true)?;
-        hashes_offsets.write_offset_file(true)?;
     }
 
     // Lastly, remove any in-progress streams file

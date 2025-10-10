@@ -164,6 +164,26 @@ pub struct MultiFile {
 }
 
 impl MultiFile {
+    pub fn fix_data_file_slab_indexes(base_path: &Path) -> Result<()> {
+        let mut file_id = 0;
+
+        loop {
+            let file_path = file_id_to_path(base_path, file_id);
+            if !file_path.exists() {
+                break;
+            }
+
+            // Lets just re-generate and move on...
+            let mut slab_offsets = regenerate_index(file_path, None)?;
+            slab_offsets.write_offset_file(true)?;
+            drop(slab_offsets);
+
+            file_id += 1;
+        }
+
+        Ok(())
+    }
+
     pub fn create<P: AsRef<Path>>(
         base_path: P,
         queue_depth: usize,
