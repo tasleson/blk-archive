@@ -14,17 +14,20 @@ const SLAB_OFFSET_FOOTER_SIZE: u64 = 24;
 // With a 24-byte header and 8 bytes per slab index, that file can store
 // (((2^32 − 1) − 24) / 8) = 536,870,908 slab indices.
 // At ~4 MiB per slab, that corresponds to ~2 PiB of addressable data in a single archive.
-// Storing that many indices in RAM would require ~4 GiB, so this implementation uses
-// a memory-mapped file for the slab index.
+// For large offset files (>= 33,554,432 offsets, ~256 MiB), we use memory-mapped I/O.
+// For smaller files, we keep offsets in RAM for simplicity and better performance.
+
+const MMAP_THRESHOLD: usize = 33_554_432; // ~256 MiB when loaded into RAM (8 bytes per offset)
 
 pub struct SlabOffsets<'a> {
     // Backing file path (for writes)
     path: PathBuf,
 
-    // Existing on-disk offsets region (mmapped, read-only)
+    // Existing on-disk offsets - either mmapped or loaded into RAM
     map: Option<Mmap>,
     map_file: Option<std::fs::File>, // Keep file handle alive for mmap
-    existing_count: usize,           // number of u64 entries in `map`
+    existing_offsets: Vec<u64>,      // RAM copy for small files
+    existing_count: usize,           // number of existing offsets
 
     // Newly appended offsets (not yet written to disk)
     new_offsets: Vec<u64>,
@@ -60,6 +63,7 @@ impl SlabOffsets<'_> {
                 path,
                 map: None,
                 map_file: None,
+                existing_offsets: Vec::new(),
                 existing_count: 0,
                 new_offsets: Vec::new(),
                 digest: SLAB_OFFSET_CRC.digest(),
@@ -110,16 +114,32 @@ impl SlabOffsets<'_> {
             ));
         }
 
-        // Map the whole file - we'll only read the data region based on existing_count
-        let map = unsafe { Mmap::map(&f)? };
-
         // Seed rolling CRC with prior CRC so we can continue with new bytes only.
         let digest = SLAB_OFFSET_CRC.digest_with_initial(crc_seed);
 
+        // Use mmap for large files, RAM for small files
+        let (map, map_file, existing_offsets) = if count as usize >= MMAP_THRESHOLD {
+            // Large file: use mmap
+            let mmap = unsafe { Mmap::map(&f)? };
+            (Some(mmap), Some(f), Vec::new())
+        } else {
+            // Small file: load into RAM
+            let mut offsets = Vec::with_capacity(count as usize);
+            (&f).seek(SeekFrom::Start(0))?;
+            for _ in 0..count {
+                let mut buf = [0u8; 8];
+                (&f).read_exact(&mut buf)?;
+                offsets.push(u64::from_le_bytes(buf));
+            }
+            drop(f);
+            (None, None, offsets)
+        };
+
         Ok(Self {
             path,
-            map: Some(map),
-            map_file: Some(f),
+            map,
+            map_file,
+            existing_offsets,
             existing_count: count as usize,
             new_offsets: Vec::new(),
             digest,
@@ -137,10 +157,15 @@ impl SlabOffsets<'_> {
         self.len() == 0
     }
 
-    /// Random access by index. Uses mmap for existing, Vec for new.
+    /// Random access by index. Uses mmap or RAM for existing, Vec for new.
     pub fn get_slab_offset(&self, idx: usize) -> Option<u64> {
         if idx < self.existing_count {
-            let start = (idx) * 8;
+            // Check RAM first
+            if !self.existing_offsets.is_empty() {
+                return self.existing_offsets.get(idx).copied();
+            }
+            // Fall back to mmap
+            let start = idx * 8;
             let end = start + 8;
             let map = self.map.as_ref()?;
             let mut arr = [0u8; 8];
@@ -159,7 +184,7 @@ impl SlabOffsets<'_> {
         self.digest.update(&off.to_le_bytes());
     }
 
-    /// Write combined (existing mmap region + new entries) to disk:
+    /// Write combined (existing + new entries) to disk:
     ///
     ///  Close file handle and mmap.
     ///  Seek to end, back up footer size, write new entries and
@@ -167,7 +192,7 @@ impl SlabOffsets<'_> {
     ///
     ///     If `sync` is true, fsync the file.
     ///
-    /// Reopen file and mmap
+    /// Reopen file and either mmap or load into RAM based on size
     pub fn write_offset_file(&mut self, sync: bool) -> Result<()> {
         let total_count = self.len();
 
@@ -211,15 +236,33 @@ impl SlabOffsets<'_> {
             w.sync_all()?;
         }
 
-        // Explicitly close the write handle before reopening for mmap
+        // Explicitly close the write handle before reopening
         drop(w);
 
-        // Refresh our mmap to point at the whole file
-        // We'll only read the data region based on existing_count
-        let f_ro = OpenOptions::new().read(true).open(&self.path)?;
-        let mm = unsafe { Mmap::map(&f_ro)? };
-        self.map = Some(mm);
-        self.map_file = Some(f_ro);
+        // Determine whether to use mmap or RAM based on size
+        if total_count >= MMAP_THRESHOLD {
+            // Large file: use mmap
+            let f_ro = OpenOptions::new().read(true).open(&self.path)?;
+            let mm = unsafe { Mmap::map(&f_ro)? };
+            self.map = Some(mm);
+            self.map_file = Some(f_ro);
+            self.existing_offsets.clear();
+        } else {
+            // Small file: load into RAM
+            let f_ro = OpenOptions::new().read(true).open(&self.path)?;
+            let mut offsets = Vec::with_capacity(total_count);
+            (&f_ro).seek(SeekFrom::Start(0))?;
+            for _ in 0..total_count {
+                let mut buf = [0u8; 8];
+                (&f_ro).read_exact(&mut buf)?;
+                offsets.push(u64::from_le_bytes(buf));
+            }
+            drop(f_ro);
+            self.map = None;
+            self.map_file = None;
+            self.existing_offsets = offsets;
+        }
+
         self.existing_count = total_count;
         self.new_offsets.clear();
         // Re-seed crc64 with the new CRC so further appends can continue without re-scan.
