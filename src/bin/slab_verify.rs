@@ -250,7 +250,12 @@ fn verify_slabs(slab_path: &PathBuf, verbose: bool, max_slabs: usize) -> Result<
         }
 
         let mut expected_csum = [0u8; 8];
-        data.read_exact(&mut expected_csum)?;
+        data.read_exact(&mut expected_csum).with_context(|| {
+            format!(
+                "Failed to read expected checksum for slab {} (8 bytes at current position)",
+                slab_index
+            )
+        })?;
 
         if remaining < SLAB_META_SIZE + len {
             return Err(anyhow!(
@@ -263,7 +268,9 @@ fn verify_slabs(slab_path: &PathBuf, verbose: bool, max_slabs: usize) -> Result<
 
         // Read and verify checksum
         let mut buf = vec![0; len as usize];
-        data.read_exact(&mut buf)?;
+        data.read_exact(&mut buf).with_context(|| {
+            format!("Failed to read slab {} payload ({} bytes)", slab_index, len)
+        })?;
 
         let actual_csum = blk_archive::hash::hash_64(&buf);
         if actual_csum[..] != expected_csum[..] {
@@ -333,9 +340,19 @@ fn verify_offsets_file(offsets_path: &PathBuf, verify_crc: bool) -> Result<usize
     }
 
     // Read footer to get count
-    f.seek(SeekFrom::End(-24))?;
+    f.seek(SeekFrom::End(-24)).with_context(|| {
+        format!(
+            "Failed to seek to footer in offsets file {:?} (file length: {})",
+            offsets_path, len
+        )
+    })?;
     let mut footer = [0u8; 24];
-    f.read_exact(&mut footer)?;
+    f.read_exact(&mut footer).with_context(|| {
+        format!(
+            "Failed to read 24-byte footer from offsets file {:?}",
+            offsets_path
+        )
+    })?;
 
     let count = u64::from_le_bytes(footer[8..16].try_into().unwrap());
 

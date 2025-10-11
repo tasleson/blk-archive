@@ -121,11 +121,25 @@ impl ThinChunker {
                 let run_len = run.end - run.start;
                 if run_len <= self.max_read_size as u64 {
                     let mut buf = vec![0; run_len as usize];
-                    self.input.read_exact_at(&mut buf, run.start)?;
+                    self.input
+                        .read_exact_at(&mut buf, run.start)
+                        .with_context(|| {
+                            format!(
+                                "Failed to read thin device mapped run ({} bytes at offset {})",
+                                run_len, run.start
+                            )
+                        })?;
                     Ok(Some(Chunk::Mapped(buf)))
                 } else {
                     let mut buf = vec![0; self.max_read_size];
-                    self.input.read_exact_at(&mut buf, run.start)?;
+                    self.input
+                        .read_exact_at(&mut buf, run.start)
+                        .with_context(|| {
+                            format!(
+                                "Failed to read thin device mapped run chunk ({} bytes at offset {})",
+                                self.max_read_size, run.start
+                            )
+                        })?;
                     self.current_run = Some((true, (run.start + buf.len() as u64)..run.end));
                     Ok(Some(Chunk::Mapped(buf)))
                 }
@@ -189,11 +203,25 @@ impl DeltaChunker {
                 let run_len = run.end - run.start;
                 if run_len <= self.max_read_size as u64 {
                     let mut buf = vec![0; run_len as usize];
-                    self.input.read_exact_at(&mut buf, run.start)?;
+                    self.input
+                        .read_exact_at(&mut buf, run.start)
+                        .with_context(|| {
+                            format!(
+                                "Failed to read delta device addition run ({} bytes at offset {})",
+                                run_len, run.start
+                            )
+                        })?;
                     Ok(Some(Chunk::Mapped(buf)))
                 } else {
                     let mut buf = vec![0; self.max_read_size];
-                    self.input.read_exact_at(&mut buf, run.start)?;
+                    self.input
+                        .read_exact_at(&mut buf, run.start)
+                        .with_context(|| {
+                            format!(
+                                "Failed to read delta device addition run chunk ({} bytes at offset {})",
+                                self.max_read_size, run.start
+                            )
+                        })?;
                     self.current_run =
                         Some((DualType::Left, (run.start + buf.len() as u64)..run.end));
                     Ok(Some(Chunk::Mapped(buf)))

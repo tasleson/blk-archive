@@ -256,7 +256,12 @@ impl ThinDest {
 
     fn read(&mut self, len: u64) -> Result<Vec<u8>> {
         let mut buf = vec![0; len as usize];
-        self.output.read_exact(&mut buf[..])?;
+        self.output.read_exact(&mut buf[..]).with_context(|| {
+            format!(
+                "Failed to read {} bytes from output device at position {}",
+                len, self.pos
+            )
+        })?;
         self.pos += len;
         Ok(buf)
     }

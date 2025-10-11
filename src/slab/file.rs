@@ -203,7 +203,13 @@ pub fn regenerate_index<'a, P: AsRef<Path>>(
         }
 
         let mut expected_csum: Hash64 = Hash64::default();
-        data.read_exact(&mut expected_csum)?;
+        data.read_exact(&mut expected_csum).with_context(|| {
+            format!(
+                "Failed to read 8-byte checksum for slab {} in file {}",
+                slab_index,
+                slab_name.to_string_lossy()
+            )
+        })?;
 
         if remaining < SLAB_HDR_LEN + len {
             return Err(anyhow!(
@@ -214,7 +220,14 @@ pub fn regenerate_index<'a, P: AsRef<Path>>(
         }
 
         let mut buf = vec![0; len as usize];
-        data.read_exact(&mut buf)?;
+        data.read_exact(&mut buf).with_context(|| {
+            format!(
+                "Failed to read {} bytes of payload for slab {} in file {}",
+                len,
+                slab_index,
+                slab_name.to_string_lossy()
+            )
+        })?;
 
         let actual_csum = hash_64(&buf);
         if actual_csum != expected_csum {
@@ -545,14 +558,22 @@ impl<'a> SlabFile<'a> {
         assert_eq!(magic, SLAB_MAGIC);
 
         let mut expected_csum: Hash64 = Hash64::default();
-        shared.data.read_exact(&mut expected_csum)?;
+        shared
+            .data
+            .read_exact(&mut expected_csum)
+            .with_context(|| {
+                format!(
+                    "Failed to read 8-byte checksum for slab {} at offset {}",
+                    slab, offset
+                )
+            })?;
 
         let mut buf = vec![0; len as usize];
         let slab_read_result = shared.data.read_exact(&mut buf);
         if let Err(e) = slab_read_result {
             return Err(anyhow!(format!(
-                "While trying to read the slab {} with len {} we got error '{:#}'",
-                slab, len, e
+                "Failed to read slab {} payload ({} bytes at offset {}): {:#}",
+                slab, len, offset, e
             )));
         }
 

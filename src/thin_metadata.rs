@@ -33,11 +33,14 @@ fn collect_dm_devs(dm: &mut DM) -> Result<DevMap> {
 
 // FIXME: this duplicates a lot of the work done when reading the mappings
 pub fn is_thin_device<P: AsRef<Path>>(path: P) -> Result<bool> {
+    let file_context = path.as_ref().to_path_buf().clone();
+
     let thin = OpenOptions::new()
         .read(true)
         .write(false)
         .create(false)
-        .open(path)?;
+        .open(path)
+        .with_context(|| format!("is_thin_device open error {:?}", file_context))?;
 
     let metadata = thin.metadata()?;
 

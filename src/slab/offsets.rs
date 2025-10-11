@@ -72,8 +72,20 @@ impl SlabOffsets<'_> {
 
         // Read last 24 bytes: FOOT_MAGIC | COUNT | CRC64
         let mut footer = [0u8; 24];
-        (&f).seek(SeekFrom::End(-(SLAB_OFFSET_FOOTER_SIZE as i64)))?;
-        (&f).read_exact(&mut footer)?;
+        (&f).seek(SeekFrom::End(-(SLAB_OFFSET_FOOTER_SIZE as i64)))
+            .with_context(|| {
+                format!(
+                    "Failed to seek to footer in offsets file {:?} (file size: {})",
+                    path.as_ref() as &Path,
+                    len
+                )
+            })?;
+        (&f).read_exact(&mut footer).with_context(|| {
+            format!(
+                "Failed to read 24-byte footer from offsets file {:?}",
+                path.as_ref() as &Path
+            )
+        })?;
 
         let magic = u64::from_le_bytes(footer[0..8].try_into().unwrap());
         let count = u64::from_le_bytes(footer[8..16].try_into().unwrap());
@@ -254,8 +266,14 @@ pub fn validate_slab_offsets_file<P: AsRef<Path>>(p: P, verify_crc: bool) -> Res
 
     // Read 24-byte footer.
     let mut tail = [0u8; 24];
-    (&f).seek(SeekFrom::End(-24))?;
-    (&f).read_exact(&mut tail)?;
+    (&f).seek(SeekFrom::End(-24)).with_context(|| {
+        format!(
+            "Failed to seek to footer in offsets file {:?} (file size: {})",
+            path, len
+        )
+    })?;
+    (&f).read_exact(&mut tail)
+        .with_context(|| format!("Failed to read 24-byte footer from offsets file {:?}", path))?;
 
     let magic = u64::from_le_bytes(tail[0..8].try_into().unwrap());
     let count = u64::from_le_bytes(tail[8..16].try_into().unwrap());
@@ -284,11 +302,23 @@ pub fn validate_slab_offsets_file<P: AsRef<Path>>(p: P, verify_crc: bool) -> Res
     let mut crc = SLAB_OFFSET_CRC.digest();
     let mut buf = vec![0u8; 1 << 20]; // 1 MiB buffer
     let mut remaining = data_end;
-    (&f).seek(SeekFrom::Start(0))?;
+    (&f).seek(SeekFrom::Start(0)).with_context(|| {
+        format!(
+            "Failed to seek to start of offsets file {:?} for CRC verification",
+            path
+        )
+    })?;
+    let mut bytes_read = 0u64;
     while remaining > 0 {
         let to_read = std::cmp::min(remaining as usize, buf.len());
-        (&f).read_exact(&mut buf[..to_read])?;
+        (&f).read_exact(&mut buf[..to_read]).with_context(|| {
+            format!(
+                "Failed to read {} bytes from offsets file {:?} for CRC verification (at offset {}, remaining {})",
+                to_read, path, bytes_read, remaining
+            )
+        })?;
         crc.update(&buf[..to_read]);
+        bytes_read += to_read as u64;
         remaining -= to_read as u64;
     }
     let crc_computed = crc.finalize();

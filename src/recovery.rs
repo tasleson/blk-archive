@@ -151,8 +151,12 @@ impl RecoveryCheckpoint {
 
         // Read checksum
         let mut stored_checksum = [0u8; 8];
-        file.read_exact(&mut stored_checksum)
-            .context("Failed to read checksum")?;
+        file.read_exact(&mut stored_checksum).with_context(|| {
+            format!(
+                "Failed to read 8-byte checksum from recovery checkpoint file: {:?}",
+                path as &Path
+            )
+        })?;
 
         // Read checkpoint data
         let mut data_buf = Vec::new();
