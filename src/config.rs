@@ -66,14 +66,16 @@ pub fn read_stream_config(base: &Path, stream_id: &str) -> Result<StreamConfig> 
     Ok(config)
 }
 
-pub fn write_stream_config(archive_dir: &Path, stream_id: &str, cfg: &StreamConfig) -> Result<()> {
-    let p = stream_config(archive_dir, stream_id);
+// As we're creating a temporary directory for the stream, we simply pass it in!
+pub fn write_stream_config(stream_dir: &Path, cfg: &StreamConfig) -> Result<()> {
+    let stream_file = stream_dir.join("config.yaml");
     let mut output = fs::OpenOptions::new()
         .read(false)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(p)?;
+        .open(stream_file.clone())
+        .with_context(|| format!("unable to create file {:?}", stream_file))?;
     let yaml = serde_yaml_ng::to_string(cfg).unwrap();
     output.write_all(yaml.as_bytes())?;
     Ok(())

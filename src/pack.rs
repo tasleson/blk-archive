@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::prelude::*;
 use clap::ArgMatches;
-use rand::prelude::*;
-use rand_chacha::ChaCha20Rng;
 use serde_json::json;
 use serde_json::to_string_pretty;
 use size_display::Size;
@@ -22,7 +20,9 @@ use crate::content_sensitive_splitter::*;
 use crate::hash::*;
 use crate::iovec::*;
 use crate::output::Output;
-use crate::paths::*;
+use crate::paths::{
+    data_path, finalize_stream_dir, hashes_path, new_stream_path_sharded, stream_path_file,
+};
 use crate::run_iter::*;
 use crate::slab::builder::*;
 use crate::slab::*;
@@ -193,42 +193,6 @@ impl<'a> IoVecHandler for DedupHandler<'a> {
 }
 
 //-----------------------------------------
-
-// Returns (stream_id, temp_path, final_path)
-fn new_stream_path_(
-    archive_dir: &Path,
-    rng: &mut ChaCha20Rng,
-) -> Result<Option<(String, PathBuf, PathBuf)>> {
-    // choose a random number
-    let n: u64 = rng.gen();
-
-    // turn this into a path
-    let name = format!("{:>016x}", n);
-    let temp_name = format!(".tmp_{}", name);
-    let temp_path: PathBuf = ["streams", &temp_name].iter().collect();
-    let final_path: PathBuf = ["streams", &name].iter().collect();
-    let final_path = archive_dir.join(final_path);
-    let temp_path = archive_dir.join(&temp_path);
-
-    // Check both temp and final paths don't exist
-    if temp_path.exists() || final_path.exists() {
-        Ok(None)
-    } else {
-        Ok(Some((name, temp_path, final_path)))
-    }
-}
-
-fn new_stream_path(archive_dir: &Path) -> Result<(String, PathBuf, PathBuf)> {
-    let mut rng = ChaCha20Rng::from_entropy();
-    loop {
-        if let Some(r) = new_stream_path_(archive_dir, &mut rng)? {
-            return Ok(r);
-        }
-    }
-
-    // Can't get here
-}
-
 #[inline]
 fn read_positional(file: &File, buf: &mut [u8], pos: u64) -> io::Result<usize> {
     file.read_at(buf, pos)
@@ -345,7 +309,7 @@ impl Packer {
             )?
         };
 
-        let (stream_id, temp_stream_dir, final_stream_dir) = new_stream_path(archive_dir)?;
+        let (stream_id, temp_stream_dir, final_stream_dir) = new_stream_path_sharded(archive_dir)?;
 
         // Create temporary stream directory
         std::fs::create_dir(&temp_stream_dir)
@@ -489,12 +453,6 @@ impl Packer {
             ));
         }
 
-        // Write stream config to temp directory
-        let temp_stream_id = temp_stream_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid temp stream directory"))?;
-
         let cfg = config::StreamConfig {
             name: Some(self.stream_name.to_string()),
             source_path: self.input_path.display().to_string(),
@@ -505,18 +463,11 @@ impl Packer {
             thin_id: self.thin_id,
             source_sig: Some(input_hex_digest),
         };
-        config::write_stream_config(archive_dir, temp_stream_id, &cfg)?;
+        config::write_stream_config(&temp_stream_dir, &cfg)?;
 
         // Atomically move temp stream directory to final location
         // This is the commit point - either the stream exists completely or not at all
-        std::fs::rename(&temp_stream_dir, &final_stream_dir).with_context(|| {
-            format!(
-                "Failed to atomically commit stream directory: {:?} -> {:?}",
-                temp_stream_dir, final_stream_dir
-            )
-        })?;
-
-        //TODO: Sync stream directory?
+        finalize_stream_dir(&temp_stream_dir, &final_stream_dir)?;
 
         // Extract the Data archive from the handler to return it for reuse
         let archive = handler.take_archive();
@@ -605,7 +556,7 @@ fn thin_packer(
 
 // FIXME: slow
 fn open_thin_stream(base: &Path, stream_id: &str) -> Result<SlabFile<'static>> {
-    SlabFileBuilder::open(stream_path(base, stream_id))
+    SlabFileBuilder::open(stream_path_file(base, stream_id))
         .build()
         .context("couldn't open old stream file")
 }
