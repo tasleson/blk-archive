@@ -48,7 +48,10 @@ impl<D: UnpackDest> Unpacker<D, MultiFile> {
         let hashes_file = Arc::new(Mutex::new(
             SlabFileBuilder::open(hashes_path(archive_dir)).build()?,
         ));
-        let stream_file = SlabFileBuilder::open(stream_path(archive_dir, stream)).build()?;
+        let stream_file_name = stream_path_file(archive_dir, stream);
+        let stream_file = SlabFileBuilder::open(&stream_file_name)
+            .build()
+            .with_context(|| format!("Unable to open stream path = {:?}", stream_file_name))?;
 
         Ok(Self {
             stream_file,

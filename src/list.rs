@@ -4,12 +4,12 @@ use serde_json::to_string_pretty;
 use anyhow::Result;
 use chrono::prelude::*;
 use clap::ArgMatches;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::config;
 use crate::output::Output;
+use crate::paths::*;
 
 //-----------------------------------------
 
@@ -19,16 +19,14 @@ fn fmt_time(t: &chrono::DateTime<FixedOffset>) -> String {
 
 pub fn run(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
     let archive_dir = Path::new(matches.get_one::<String>("ARCHIVE").unwrap()).canonicalize()?;
-
-    let streams_path = archive_dir.join("streams");
-    let paths = fs::read_dir(streams_path)?;
-    let stream_ids = paths
-        .filter_map(|entry| entry.ok().and_then(|e| e.file_name().into_string().ok()))
-        .filter(|name| !name.starts_with(".tmp_")) // Skip temporary directories
-        .collect::<Vec<String>>();
-
     let mut streams = Vec::new();
-    for id in stream_ids {
+
+    for stream_dir in stream_iter_lazy(&archive_dir)? {
+        let id = stream_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let cfg = config::read_stream_config(&archive_dir, &id)?;
         streams.push((id, config::to_date_time(&cfg.pack_time), cfg));
     }
@@ -41,7 +39,7 @@ pub fn run(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
             let source = cfg.name.unwrap();
             let size = cfg.size;
             j_output.push(json!(
-                {"stream_id": id, "size": size, "time": time.to_rfc3339(), "source": source}
+                {"stream_id": id, "size": size, "time": time.to_rfc3339(), "source": source, "input_file": cfg.source_path}
             ));
         }
 

@@ -10,7 +10,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::output::Output;
-use crate::paths::*;
+use crate::paths::stream_path_file;
 use crate::slab::builder::*;
 use crate::slab::*;
 use crate::stack::*;
@@ -987,7 +987,7 @@ pub struct Dumper {
 
 impl Dumper {
     pub fn new(archive_dir: &std::path::Path, stream: &str) -> Result<Self> {
-        let stream_path = stream_path(archive_dir, stream);
+        let stream_path = stream_path_file(archive_dir, stream);
         let stream_file = SlabFileBuilder::open(stream_path).build()?;
 
         Ok(Self {
