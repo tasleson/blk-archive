@@ -1,7 +1,7 @@
 use serde_json::json;
 use serde_json::to_string_pretty;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::prelude::*;
 use clap::ArgMatches;
 use std::path::Path;
@@ -18,16 +18,21 @@ fn fmt_time(t: &chrono::DateTime<FixedOffset>) -> String {
 }
 
 pub fn run(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
-    let archive_dir = Path::new(matches.get_one::<String>("ARCHIVE").unwrap()).canonicalize()?;
+    let archive_dir = Path::new(matches.get_one::<String>("ARCHIVE").unwrap())
+        .canonicalize()
+        .with_context(|| "Failed to canonicalize archive directory")?;
     let mut streams = Vec::new();
 
-    for stream_dir in stream_iter_lazy(&archive_dir)? {
+    for stream_dir in stream_iter_lazy(&archive_dir)
+        .with_context(|| format!("Failed to iterate streams in {:?}", archive_dir))?
+    {
         let id = stream_dir
             .file_name()
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let cfg = config::read_stream_config(&archive_dir, &id)?;
+        let cfg = config::read_stream_config(&archive_dir, &id)
+            .with_context(|| format!("Failed to read stream config for {}", id))?;
         streams.push((id, config::to_date_time(&cfg.pack_time), cfg));
     }
 
