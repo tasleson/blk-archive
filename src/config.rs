@@ -77,7 +77,9 @@ pub fn write_stream_config(stream_dir: &Path, cfg: &StreamConfig) -> Result<()> 
         .open(stream_file.clone())
         .with_context(|| format!("unable to create file {:?}", stream_file))?;
     let yaml = serde_yaml_ng::to_string(cfg).unwrap();
-    output.write_all(yaml.as_bytes())?;
+    output
+        .write_all(yaml.as_bytes())
+        .with_context(|| format!("Failed to write stream config to {:?}", stream_file))?;
     Ok(())
 }
 
