@@ -5,7 +5,6 @@ use crate::hash::*;
 use crate::hash_index::*;
 use crate::iovec::*;
 use crate::paths;
-use crate::paths::*;
 use crate::recovery::*;
 use crate::slab::MultiFile;
 use crate::slab::*;
@@ -630,7 +629,7 @@ pub fn flight_check<P: AsRef<std::path::Path>>(archive_path: P) -> Result<()> {
         )
     })?;
 
-    let hashes_file = hashes_path(&archive_path);
+    let hashes_file = paths::hashes_path(&archive_path);
     let data_path = data_file.as_ref();
     let hashes_path = hashes_file.as_ref();
 
@@ -652,12 +651,12 @@ pub fn flight_check<P: AsRef<std::path::Path>>(archive_path: P) -> Result<()> {
                 Ok(offsets) => offsets,
                 Err(_) => {
                     // Failed to read, regenerate
-                    crate::slab::regenerate_index(slab_path, None)?
+                    crate::slab::regenerate_index(slab_path)?
                 }
             }
         } else {
             // No offsets file, regenerate
-            crate::slab::regenerate_index(slab_path, None)?
+            crate::slab::regenerate_index(slab_path)?
         };
 
         Ok((offsets, false))
@@ -697,20 +696,18 @@ pub fn flight_check<P: AsRef<std::path::Path>>(archive_path: P) -> Result<()> {
         drop(hashes_offsets);
 
         // Try regenerating both to be sure, regenerating index files is safe.
-        let mut data_offsets =
-            crate::slab::regenerate_index(data_path, None).with_context(|| {
-                format!(
-                    "flight_check: failed to regenerate data index for {:?}",
-                    data_path
-                )
-            })?;
-        let mut hashes_offsets =
-            crate::slab::regenerate_index(hashes_path, None).with_context(|| {
-                format!(
-                    "flignt_check: Failed to regenerate hashes index for {:?}",
-                    hashes_path
-                )
-            })?;
+        let mut data_offsets = crate::slab::regenerate_index(data_path).with_context(|| {
+            format!(
+                "flight_check: failed to regenerate data index for {:?}",
+                data_path
+            )
+        })?;
+        let mut hashes_offsets = crate::slab::regenerate_index(hashes_path).with_context(|| {
+            format!(
+                "flignt_check: Failed to regenerate hashes index for {:?}",
+                hashes_path
+            )
+        })?;
 
         let hashes_count = hashes_offsets.len();
 
@@ -826,7 +823,7 @@ mod tests {
 
         let data_file = MultiFile::open_for_write(archive_path, 10, slab_capacity)?;
         let hashes_file = Arc::new(Mutex::new(
-            SlabFileBuilder::open(hashes_path(archive_path))
+            SlabFileBuilder::open(paths::hashes_path(archive_path))
                 .write(true)
                 .queue_depth(16)
                 .build()
@@ -936,7 +933,7 @@ mod tests {
 
         let data_file = MultiFile::open_for_write(archive_path, 10, slab_capacity)?;
         let hashes_file = Arc::new(Mutex::new(
-            SlabFileBuilder::open(hashes_path(archive_path))
+            SlabFileBuilder::open(paths::hashes_path(archive_path))
                 .write(true)
                 .queue_depth(16)
                 .build()
