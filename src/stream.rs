@@ -10,10 +10,9 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::output::Output;
-use crate::paths::*;
-use crate::slab::builder::*;
 use crate::slab::*;
 use crate::stack::*;
+use crate::stream_archive::{parse_stream_id, MemorySlab, StreamArchive};
 
 //-----------------------------------------
 
@@ -988,9 +987,9 @@ pub struct Dumper<S: StreamData> {
 }
 
 impl<S: StreamData> Dumper<S> {
-    pub fn new(archive_dir: &std::path::Path, stream: &str) -> Result<Dumper<SlabFile<'static>>> {
-        let stream_path = stream_path(archive_dir, stream);
-        let stream_file = SlabFileBuilder::open(stream_path).build()?;
+    pub fn new(archive_dir: &std::path::Path, stream: &str) -> Result<Dumper<MemorySlab>> {
+        let stream_id = parse_stream_id(stream)?;
+        let stream_file = StreamArchive::open_read(archive_dir)?.get_stream(stream_id)?;
 
         Ok(Dumper {
             stream_file,
