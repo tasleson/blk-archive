@@ -8,6 +8,7 @@ use std::sync::Arc;
 use thinp::report::*;
 
 use crate::cuckoo_filter::*;
+use crate::hash_algorithm::{BlockHashAlgorithm, FileHashAlgorithm};
 use crate::paths;
 use crate::paths::*;
 use crate::recovery;
@@ -31,6 +32,8 @@ fn write_config(
     block_size: usize,
     hash_cache_size_meg: usize,
     data_cache_size_meg: usize,
+    block_hash_algorithm: BlockHashAlgorithm,
+    file_hash_algorithm: FileHashAlgorithm,
 ) -> Result<()> {
     let mut p = PathBuf::new();
     p.push(root);
@@ -49,6 +52,8 @@ fn write_config(
         splitter_alg: "RollingHashV0".to_string(),
         hash_cache_size_meg,
         data_cache_size_meg,
+        block_hash_algorithm,
+        file_hash_algorithm,
     };
 
     write!(output, "{}", &serde_yaml_ng::to_string(&config).unwrap())
@@ -97,6 +102,8 @@ fn create(
     block_size: usize,
     hash_cache_size_meg: usize,
     data_cache_size_meg: usize,
+    block_hash_algorithm: BlockHashAlgorithm,
+    file_hash_algorithm: FileHashAlgorithm,
 ) -> Result<()> {
     fs::create_dir_all(archive_dir)
         .with_context(|| format!("Unable to create archive {:?}", archive_dir))?;
@@ -106,6 +113,8 @@ fn create(
         block_size,
         hash_cache_size_meg,
         data_cache_size_meg,
+        block_hash_algorithm,
+        file_hash_algorithm,
     )?;
     create_sub_dir(archive_dir, "data")?;
     create_sub_dir(archive_dir, "streams")?;
@@ -157,7 +166,15 @@ pub struct CreateParmeters {
 }
 
 pub fn default(dir: &Path) -> Result<CreateParmeters> {
-    create(dir, true, 4096, 1024, 1024)?;
+    create(
+        dir,
+        true,
+        4096,
+        1024,
+        1024,
+        BlockHashAlgorithm::default(),
+        FileHashAlgorithm::default(),
+    )?;
     Ok(CreateParmeters {
         data_compression: true,
         block_size: 4096,
@@ -179,12 +196,22 @@ pub fn run(matches: &ArgMatches, report: Arc<Report>) -> Result<()> {
     let hash_cache_size_meg = numeric_option::<usize>(matches, "HASH_CACHE_SIZE_MEG", 1024)?;
     let data_cache_size_meg = numeric_option::<usize>(matches, "DATA_CACHE_SIZE_MEG", 1024)?;
 
+    let block_hash_str = matches.get_one::<String>("BLOCK_HASH").unwrap();
+    let block_hash_algorithm = BlockHashAlgorithm::parse(block_hash_str)
+        .ok_or_else(|| anyhow!("Invalid block hash algorithm: {}", block_hash_str))?;
+
+    let file_hash_str = matches.get_one::<String>("FILE_HASH").unwrap();
+    let file_hash_algorithm = FileHashAlgorithm::parse(file_hash_str)
+        .ok_or_else(|| anyhow!("Invalid file hash algorithm: {}", file_hash_str))?;
+
     create(
         archive_dir,
         data_compression,
         block_size,
         hash_cache_size_meg,
         data_cache_size_meg,
+        block_hash_algorithm,
+        file_hash_algorithm,
     )
 }
 
