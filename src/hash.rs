@@ -1,16 +1,23 @@
 use blake2::{Blake2b, Digest};
+use fasthash::murmur3::Hasher128_x64 as Murmur3Hasher;
+use fasthash::{FastHasher, HasherExt};
 use std::convert::TryInto;
+use std::hash::Hasher;
+use xxhash_rust::xxh3;
 
+use crate::hash_algorithm::BlockHashAlgorithm;
 use crate::iovec::*;
 
 //-----------------------------------------
 
 type Blake2b32 = Blake2b<generic_array::typenum::U4>;
 type Blake2b64 = Blake2b<generic_array::typenum::U8>;
+type Blake2b128 = Blake2b<generic_array::typenum::U16>;
 type Blake2b256 = Blake2b<generic_array::typenum::U32>;
 
 pub type Hash32 = generic_array::GenericArray<u8, generic_array::typenum::U4>;
 pub type Hash64 = generic_array::GenericArray<u8, generic_array::typenum::U8>;
+pub type Hash128 = generic_array::GenericArray<u8, generic_array::typenum::U16>;
 pub type Hash256 = generic_array::GenericArray<u8, generic_array::typenum::U32>;
 
 pub fn hash_256_iov(iov: &IoVec) -> Hash256 {
@@ -62,6 +69,81 @@ pub fn hash_le_u64(h: &[u8]) -> u64 {
             .try_into()
             .expect("hash_64 must return at least 8 bytes"),
     )
+}
+
+// New configurable hash functions
+
+pub fn hash_128_iov(iov: &IoVec) -> Hash128 {
+    let mut hasher = Blake2b128::new();
+    for v in iov {
+        hasher.update(&v[..]);
+    }
+    hasher.finalize()
+}
+
+pub fn hash_128(v: &[u8]) -> Hash128 {
+    let mut hasher = Blake2b128::new();
+    hasher.update(v);
+    hasher.finalize()
+}
+
+/// Hash with configurable block hash algorithm
+pub fn hash_block_iov(iov: &IoVec, algorithm: BlockHashAlgorithm) -> Vec<u8> {
+    match algorithm {
+        BlockHashAlgorithm::Blake2b256 => hash_256_iov(iov).to_vec(),
+        BlockHashAlgorithm::Blake2b128 => hash_128_iov(iov).to_vec(),
+        BlockHashAlgorithm::XxHash3_128 => {
+            let mut data = Vec::new();
+            for v in iov {
+                data.extend_from_slice(&v[..]);
+            }
+            xxh3::xxh3_128(&data).to_le_bytes().to_vec()
+        }
+        BlockHashAlgorithm::Murmur3_128 => {
+            let mut hasher = Murmur3Hasher::new();
+            for v in iov {
+                hasher.write(&v[..]);
+            }
+            let hash_value = hasher.finish_ext();
+            hash_value.to_le_bytes().to_vec()
+        }
+    }
+}
+
+/// Hash with configurable block hash algorithm (single slice)
+pub fn hash_block(v: &[u8], algorithm: BlockHashAlgorithm) -> Vec<u8> {
+    match algorithm {
+        BlockHashAlgorithm::Blake2b256 => hash_256(v).to_vec(),
+        BlockHashAlgorithm::Blake2b128 => hash_128(v).to_vec(),
+        BlockHashAlgorithm::XxHash3_128 => xxh3::xxh3_128(v).to_le_bytes().to_vec(),
+        BlockHashAlgorithm::Murmur3_128 => {
+            let mut hasher = Murmur3Hasher::new();
+            hasher.write(v);
+            let hash_value = hasher.finish_ext();
+            hash_value.to_le_bytes().to_vec()
+        }
+    }
+}
+
+/// Hash le u64 with configurable algorithm (uses 64-bit version of the same algorithm)
+pub fn hash_le_u64_with_alg(h: &[u8], algorithm: BlockHashAlgorithm) -> u64 {
+    match algorithm {
+        BlockHashAlgorithm::Blake2b256 | BlockHashAlgorithm::Blake2b128 => {
+            // For Blake2b, use the 64-bit version
+            hash_le_u64(h)
+        }
+        BlockHashAlgorithm::XxHash3_128 => {
+            // For XxHash3, use the 64-bit version
+            xxh3::xxh3_64(h)
+        }
+        BlockHashAlgorithm::Murmur3_128 => {
+            // For Murmur3, use the first 64 bits of the 128-bit hash
+            let mut hasher = Murmur3Hasher::new();
+            hasher.write(h);
+            let hash_value = hasher.finish_ext();
+            (hash_value & 0xFFFFFFFFFFFFFFFF) as u64
+        }
+    }
 }
 
 //-----------------------------------------
