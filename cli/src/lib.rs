@@ -112,6 +112,26 @@ pub fn build_cli() -> clap::Command {
                         .default_value("y")
                         .action(ArgAction::Set)
                         .help_heading("Optional Options"),
+                )
+                .arg(
+                    Arg::new("BLOCK_HASH")
+                        .long("block-hash")
+                        .value_name("ALGORITHM")
+                        .help("Hash algorithm for block lookups: blake2b-256 (default), blake2b-128, xxhash3-128, murmur3-128")
+                        .value_parser(["blake2b-256", "blake2b-128", "xxhash3-128", "murmur3-128"])
+                        .default_value("blake2b-256")
+                        .action(ArgAction::Set)
+                        .help_heading("Optional Options"),
+                )
+                .arg(
+                    Arg::new("FILE_HASH")
+                        .long("file-hash")
+                        .value_name("ALGORITHM")
+                        .help("Hash algorithm for file/stream verification: blake3-256 (default), blake2b-256, blake2b-128, xxhash3-128, murmur3-128")
+                        .value_parser(["blake3-256", "blake2b-256", "blake2b-128", "xxhash3-128", "murmur3-128"])
+                        .default_value("blake3-256")
+                        .action(ArgAction::Set)
+                        .help_heading("Optional Options"),
                 ),
         )
         .subcommand(
