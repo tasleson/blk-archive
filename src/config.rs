@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::hash_algorithm::{BlockHashAlgorithm, FileHashAlgorithm};
+
 //-----------------------------------------
 
 #[derive(Deserialize, Serialize)]
@@ -13,6 +15,10 @@ pub struct Config {
     pub splitter_alg: String,
     pub hash_cache_size_meg: usize,
     pub data_cache_size_meg: usize,
+    #[serde(default)]
+    pub block_hash_algorithm: BlockHashAlgorithm,
+    #[serde(default)]
+    pub file_hash_algorithm: FileHashAlgorithm,
 }
 
 fn numeric_override<T: std::str::FromStr>(matches: &ArgMatches, name: &str) -> Result<Option<T>> {
