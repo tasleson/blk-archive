@@ -33,24 +33,35 @@ fn collect_dm_devs(dm: &mut DM) -> Result<DevMap> {
 
 // FIXME: this duplicates a lot of the work done when reading the mappings
 pub fn is_thin_device<P: AsRef<Path>>(path: P) -> Result<bool> {
+    let p: &Path = path.as_ref();
+
     let thin = OpenOptions::new()
         .read(true)
         .write(false)
         .create(false)
-        .open(path)?;
+        .open(&path)
+        .with_context(|| format!("Error while trying to open {:?}", p))?;
 
-    let metadata = thin.metadata()?;
+    let metadata = thin
+        .metadata()
+        .with_context(|| format!("error while retrieving metadata about {:?}", p))?;
 
     if !metadata.file_type().is_block_device() {
         // Not a block device
         return Ok(false);
     }
 
-    // Get the major:minor of the device at the given path
-    let mut dm = DM::new()?;
+    // instantiate DM once and handle failure clearly
+    let mut dm = match DM::new() {
+        Ok(dm) => dm,
+        Err(_) => {
+            return Ok(false);
+        }
+    };
+
     let rdev = metadata.rdev();
     let thin_dev = Device::from(rdev);
-    let dm_devs = collect_dm_devs(&mut dm)?;
+    let dm_devs = collect_dm_devs(&mut dm).with_context(|| "trying to collect dm devices")?;
 
     let dm_name = dm_devs.get(&(thin_dev.major, thin_dev.minor));
     if dm_name.is_none() {
