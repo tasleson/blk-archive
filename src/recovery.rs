@@ -16,6 +16,7 @@ use crate::paths;
 use crate::slab;
 use crate::slab::builder::*;
 
+use crate::hash_dispatch::hash_64;
 use crate::output::Output;
 use crate::paths::*;
 
@@ -152,7 +153,7 @@ impl RecoveryCheckpoint {
         data_buf.write_u64::<LittleEndian>(self.stream_mappings_size)?;
 
         // Compute checksum over the data
-        let checksum = crate::hash::hash_64(&data_buf);
+        let checksum = hash_64(&data_buf);
 
         // Write checksum first, then data
         file.write_all(&checksum)?;
@@ -217,7 +218,7 @@ impl RecoveryCheckpoint {
             .context("Failed to read checkpoint data")?;
 
         // Verify checksum
-        let computed_checksum = crate::hash::hash_64(&data_buf);
+        let computed_checksum = hash_64(&data_buf);
         if stored_checksum != computed_checksum.as_slice() {
             return Err(anyhow::anyhow!(
                 "Checkpoint checksum mismatch - file may be corrupted or suffered from bit rot"

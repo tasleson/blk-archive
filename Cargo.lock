@@ -212,6 +212,7 @@ dependencies = [
  "linked-hash-map",
  "lru",
  "memmap2",
+ "murmur3",
  "nix",
  "nom",
  "num_enum",
@@ -928,6 +929,12 @@ checksum = "b8402cab7aefae129c6977bb0ff1b8fd9a04eb5b51efc50a70bea51cda0c7924"
 dependencies = [
  "adler2",
 ]
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "nix"

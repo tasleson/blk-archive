@@ -8,7 +8,8 @@ use std::sync::Arc;
 use thinp::report::*;
 
 use crate::cuckoo_filter::*;
-use crate::hash_algorithm::{BlockHashAlgorithm, FileHashAlgorithm};
+use crate::hash_algorithm::HashAlgorithmStored;
+use crate::hash_dispatch::init_hash_functions;
 use crate::paths;
 use crate::paths::*;
 use crate::recovery;
@@ -32,8 +33,8 @@ fn write_config(
     block_size: usize,
     hash_cache_size_meg: usize,
     data_cache_size_meg: usize,
-    block_hash_algorithm: BlockHashAlgorithm,
-    file_hash_algorithm: FileHashAlgorithm,
+    block_hash_algorithm: HashAlgorithmStored,
+    file_hash_algorithm: HashAlgorithmStored,
 ) -> Result<()> {
     let mut p = PathBuf::new();
     p.push(root);
@@ -102,8 +103,8 @@ fn create(
     block_size: usize,
     hash_cache_size_meg: usize,
     data_cache_size_meg: usize,
-    block_hash_algorithm: BlockHashAlgorithm,
-    file_hash_algorithm: FileHashAlgorithm,
+    block_hash_algorithm: HashAlgorithmStored,
+    file_hash_algorithm: HashAlgorithmStored,
 ) -> Result<()> {
     fs::create_dir_all(archive_dir)
         .with_context(|| format!("Unable to create archive {:?}", archive_dir))?;
@@ -172,8 +173,8 @@ pub fn default(dir: &Path) -> Result<CreateParmeters> {
         4096,
         1024,
         1024,
-        BlockHashAlgorithm::default(),
-        FileHashAlgorithm::default(),
+        HashAlgorithmStored::default(),
+        HashAlgorithmStored::default(),
     )?;
     Ok(CreateParmeters {
         data_compression: true,
@@ -197,12 +198,17 @@ pub fn run(matches: &ArgMatches, report: Arc<Report>) -> Result<()> {
     let data_cache_size_meg = numeric_option::<usize>(matches, "DATA_CACHE_SIZE_MEG", 1024)?;
 
     let block_hash_str = matches.get_one::<String>("BLOCK_HASH").unwrap();
-    let block_hash_algorithm = BlockHashAlgorithm::parse(block_hash_str)
+    let block_hash_algorithm = HashAlgorithmStored::parse(block_hash_str)
         .ok_or_else(|| anyhow!("Invalid block hash algorithm: {}", block_hash_str))?;
 
     let file_hash_str = matches.get_one::<String>("FILE_HASH").unwrap();
-    let file_hash_algorithm = FileHashAlgorithm::parse(file_hash_str)
+    let file_hash_algorithm = HashAlgorithmStored::parse(file_hash_str)
         .ok_or_else(|| anyhow!("Invalid file hash algorithm: {}", file_hash_str))?;
+
+    // We need to initialize the hash function pointers
+    let (block_alg, digest_size) = block_hash_algorithm.convert();
+    let (stream_alg, _) = file_hash_algorithm.convert();
+    init_hash_functions(digest_size, block_alg, stream_alg);
 
     create(
         archive_dir,

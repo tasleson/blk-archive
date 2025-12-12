@@ -9,7 +9,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use crate::hash::*;
+use crate::hash_dispatch::*;
 use crate::slab::compression_service::*;
 use crate::slab::data_cache::*;
 use crate::slab::offsets::*;

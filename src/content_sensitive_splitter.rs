@@ -195,7 +195,7 @@ mod splitter_tests {
     use std::collections::BTreeMap;
     use std::io::{BufReader, BufWriter, Read, Write};
 
-    use crate::hash::*;
+    use crate::hash_dispatch::*;
 
     fn rand_buffer(count: usize) -> Vec<u8> {
         let mut buffer = Vec::new();

@@ -3,6 +3,7 @@ use clap::ArgMatches;
 use std::process::exit;
 use std::sync::Arc;
 
+use blk_archive::config;
 use blk_archive::create;
 use blk_archive::dump_stream;
 use blk_archive::list;
@@ -54,6 +55,9 @@ fn main_() -> Result<()> {
     // and cleaning up indexs, cuckoo filters etc.
     if let Some((subcommand_name, sub_matches)) = matches.subcommand() {
         if let Some(archive_path) = sub_matches.get_one::<String>("ARCHIVE") {
+            // Read config and ignore return value
+            let _ = config::read_config(archive_path, &matches);
+
             // Do a preflight check before proceeding to ensure the archive is in a hopefully
             // good state (skip for create command as archive doesn't exist yet)
             if subcommand_name != "create" && std::env::var("BLK_ARCHIVE_DEVEL_SKIP_DATA").is_err()

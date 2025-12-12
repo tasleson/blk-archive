@@ -7,6 +7,7 @@ pub mod cuckoo_filter;
 pub mod dump_stream;
 pub mod hash;
 pub mod hash_algorithm;
+pub mod hash_dispatch;
 pub mod hash_index;
 pub mod iovec;
 pub mod list;

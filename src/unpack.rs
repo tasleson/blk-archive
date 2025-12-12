@@ -16,7 +16,9 @@ use crate::archive;
 use crate::archive::SLAB_SIZE_TARGET;
 use crate::chunkers::*;
 use crate::config;
+use crate::hash_algorithm::HashAlgorithmStored;
 use crate::output::Output;
+use crate::pack::{create_file_hasher, FileHasher};
 use crate::paths::*;
 use crate::recovery;
 use crate::run_iter::*;
@@ -221,21 +223,13 @@ impl<W: Write> UnpackDest for ThickDest<W> {
     }
 }
 
-#[derive(Default)]
 struct ValidateStream {
-    digest: blake3::Hasher,
+    digest: Box<dyn FileHasher>,
 }
 
 impl ValidateStream {
-    fn digest_bytes(&mut self, byte: u8, len: u64) {
-        let buf_size = std::cmp::min(len, 64 * 1024 * 1024);
-        let buf = vec![byte; buf_size as usize];
-        let mut remaining = len;
-        while remaining > 0 {
-            let w_len = std::cmp::min(buf_size, remaining);
-            self.digest.update(&buf[0..(w_len as usize)]);
-            remaining -= w_len;
-        }
+    fn new(digest: Box<dyn FileHasher>) -> Self {
+        Self { digest }
     }
 }
 
@@ -246,12 +240,18 @@ impl UnpackDest for ValidateStream {
     }
 
     fn handle_unmapped(&mut self, len: u64) -> Result<()> {
-        self.digest_bytes(0, len);
+        self.digest.update_unmapped(len);
         Ok(())
     }
 
     fn complete(&mut self) -> Result<String> {
-        Ok(self.digest.finalize().to_hex().to_string())
+        // Take ownership of the hasher to call finalize_hex
+        // We need to replace it with a dummy hasher since we can't move out of &mut self
+        let hasher = std::mem::replace(
+            &mut self.digest,
+            create_file_hasher(HashAlgorithmStored::Blake3_256),
+        );
+        Ok(hasher.finalize_hex())
     }
 }
 
@@ -527,14 +527,14 @@ pub fn run_verify_stream(
     report_output: Arc<Output>,
     ouput_size: u64,
     cache_nr_entries: usize,
+    file_hash_algorithm: HashAlgorithmStored,
 ) -> Result<String> {
-    report_output.report.set_title(&format!(
-        "Validating {stream_id} with stored blake3 hash ..."
-    ));
+    report_output
+        .report
+        .set_title(&format!("Validating {stream_id} with stored hash ..."));
 
-    let dest = ValidateStream {
-        digest: blake3::Hasher::new(),
-    };
+    let digest = create_file_hasher(file_hash_algorithm);
+    let dest = ValidateStream::new(digest);
     let mut u = Unpacker::new(archive_dir, stream_id, cache_nr_entries, dest)
         .with_context(|| format!("unpacker::new({archive_dir:?},{stream_id},{cache_nr_entries}"))?;
     u.unpack(report_output, ouput_size)
@@ -771,7 +771,7 @@ fn compare_hashes(stored: Option<String>, calculated_digest: String) -> Result<(
     Ok(())
 }
 
-/// Verify all streams in the archive using internal blake3 hashes.
+/// Verify all streams in the archive using internal hashes.
 /// In JSON mode, streams results as a JSON array to avoid memory issues
 /// with large archives (up to 2^32-1 streams).
 fn run_verify_all(
@@ -779,6 +779,7 @@ fn run_verify_all(
     output: Arc<Output>,
     archive_dir: &Path,
     cache_nr_entries: usize,
+    file_hash_algorithm: HashAlgorithmStored,
 ) -> Result<()> {
     let repair = matches.get_flag("REPAIR");
 
@@ -834,6 +835,7 @@ fn run_verify_all(
             stream_output,
             stream_cfg.size,
             cache_nr_entries,
+            file_hash_algorithm,
         );
 
         let (status, error_msg) = match result {
@@ -929,7 +931,13 @@ pub fn run_verify(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
 
     // Check if we're verifying all streams or just one
     if matches.get_flag("ALL") {
-        return run_verify_all(matches, output, &archive_dir, cache_nr_entries);
+        return run_verify_all(
+            matches,
+            output,
+            &archive_dir,
+            cache_nr_entries,
+            config.file_hash_algorithm,
+        );
     }
 
     // Single stream verification - require either INPUT or --internal
@@ -963,6 +971,7 @@ pub fn run_verify(matches: &ArgMatches, output: Arc<Output>) -> Result<()> {
             output,
             stream_cfg.size,
             cache_nr_entries,
+            config.file_hash_algorithm,
         )?
     } else {
         run_verify_device_or_file(

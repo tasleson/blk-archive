@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::hash::*;
+use crate::hash_dispatch::*;
 
 //--------------------------------
 

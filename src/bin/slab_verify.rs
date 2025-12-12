@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use blk_archive::hash_dispatch::hash_64;
 use blk_archive::slab::file::regenerate_index;
 use blk_archive::slab::offsets::validate_slab_offsets_file;
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -336,7 +337,7 @@ fn verify_slabs(slab_path: &Path, verbose: bool, max_slabs: usize) -> Result<Vec
         let mut buf = vec![0; len as usize];
         data.read_exact(&mut buf)?;
 
-        let actual_csum = blk_archive::hash::hash_64(&buf);
+        let actual_csum = hash_64(&buf);
         if actual_csum[..] != expected_csum[..] {
             return Err(anyhow!(
                 "Checksum mismatch at slab {}: expected {:02x?}, got {:02x?}",

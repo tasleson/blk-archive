@@ -5,7 +5,7 @@ use std::time::Duration;
 use tempfile::*;
 
 use crate::archive::SLAB_SIZE_TARGET;
-use crate::hash::{hash_64, Hash64};
+use crate::hash_dispatch::{hash_64, Hash64};
 use crate::slab::file::{FILE_MAGIC, FORMAT_VERSION, SLAB_FILE_HDR_LEN, SLAB_MAGIC};
 use crate::slab::SlabFileBuilder;
 use byteorder::{LittleEndian, WriteBytesExt};
@@ -126,7 +126,7 @@ fn sync_all_no_writes() -> Result<()> {
     });
 
     // Wait up to 10 seconds for the test to complete
-    let _ = std::thread::sleep(Duration::from_secs(10));
+    std::thread::sleep(Duration::from_secs(10));
     if !handle.is_finished() {
         panic!("sync_all() hung when opening for write with no writes!");
     }
@@ -489,7 +489,7 @@ fn truncate_to_zero_slabs() {
     write_valid_header(&mut f).unwrap();
 
     for i in 1..=3 {
-        write_slab(&mut f, &vec![i; 100]).unwrap();
+        write_slab(&mut f, &[i; 100]).unwrap();
     }
     f.flush().unwrap();
     drop(f);
@@ -523,7 +523,7 @@ fn truncate_to_slab_count_too_many() {
     write_valid_header(&mut f).unwrap();
 
     for i in 1..=3 {
-        write_slab(&mut f, &vec![i; 100]).unwrap();
+        write_slab(&mut f, &[i; 100]).unwrap();
     }
     f.flush().unwrap();
     drop(f);
@@ -556,7 +556,7 @@ fn truncate_to_same_count() {
     write_valid_header(&mut f).unwrap();
 
     for i in 1..=4 {
-        write_slab(&mut f, &vec![i; 100]).unwrap();
+        write_slab(&mut f, &[i; 100]).unwrap();
     }
     f.flush().unwrap();
     drop(f);

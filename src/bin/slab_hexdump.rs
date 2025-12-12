@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use blk_archive::config::StreamConfig;
+use blk_archive::hash_dispatch::*;
 use blk_archive::stream_metadata::deserialize_stream_config;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
@@ -530,7 +531,7 @@ fn main() -> Result<()> {
         reader.read_exact(&mut slab_data)?;
 
         // Verify checksum
-        let actual_checksum = blk_archive::hash::hash_64(&slab_data);
+        let actual_checksum = hash_64(&slab_data);
         let checksum_ok = actual_checksum[..] == checksum[..];
 
         println!("╔══════════════════════════════════════════════════════════════╗");

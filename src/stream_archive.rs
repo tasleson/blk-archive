@@ -338,6 +338,11 @@ pub fn verify_and_rebuild_streams(
 ) -> Result<usize> {
     use std::fs;
 
+    // Read archive config to get file hash algorithm
+    // Use empty ArgMatches since we don't need overrides for verification
+    let archive_config = crate::config::read_config(archive_dir, &clap::ArgMatches::default())
+        .context("Failed to read archive config")?;
+
     // Open the existing stream archive for reading
     let source_archive =
         StreamArchive::open_read(archive_dir).context("Failed to open source stream archive")?;
@@ -410,6 +415,7 @@ pub fn verify_and_rebuild_streams(
             report_output.clone(),
             config.mapped_size,
             num_cache_entries,
+            archive_config.file_hash_algorithm,
         );
 
         match stream_result {
@@ -551,7 +557,6 @@ pub fn verify_and_rebuild_streams(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -560,34 +565,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let archive_dir = temp_dir.path();
 
-        // Create the streams directory structure
-        let streams_dir = archive_dir.join("streams");
-        fs::create_dir_all(&streams_dir).unwrap();
-
-        // Create empty stream files
-        let metadata_path = streams_dir.join("metadata");
-        let mappings_path = streams_dir.join("mappings");
-
-        // Initialize empty slab files
-        use crate::slab::builder::SlabFileBuilder;
-        {
-            let mut metadata = SlabFileBuilder::create(&metadata_path)
-                .write(true)
-                .build()
-                .unwrap();
-            metadata.close().unwrap();
-
-            let mut mappings = SlabFileBuilder::create(&mappings_path)
-                .write(true)
-                .build()
-                .unwrap();
-            mappings.close().unwrap();
-        }
+        // Use the standard way to create an archive
+        let _ = crate::create::default(archive_dir);
 
         // Run verify and rebuild on empty archive
         let output = crate::utils::mk_output(false);
 
         let result = verify_and_rebuild_streams(archive_dir, false, output, 1024);
+        println!("result = {:?}", result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
 

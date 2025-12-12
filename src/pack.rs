@@ -17,7 +17,8 @@ use crate::archive::*;
 use crate::chunkers::*;
 use crate::config;
 use crate::content_sensitive_splitter::*;
-use crate::hash::*;
+use crate::hash_algorithm::HashAlgorithmStored;
+use crate::hash_dispatch::*;
 use crate::iovec::*;
 use crate::output::Output;
 use crate::paths::*;
@@ -32,7 +33,149 @@ use crate::stream_archive::{
 use crate::stream_builders::*;
 use crate::stream_metadata::serialize_stream_config;
 use crate::thin_metadata::*;
-use crate::utils::unmapped_digest_add;
+
+//-----------------------------------------
+
+/// Trait for file/stream hashing
+pub trait FileHasher {
+    fn update(&mut self, data: &[u8]);
+    fn update_unmapped(&mut self, len: u64);
+    fn finalize_hex(self: Box<Self>) -> String;
+}
+
+/// Blake3 implementation
+struct Blake3Hasher(blake3::Hasher);
+
+impl FileHasher for Blake3Hasher {
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    fn update_unmapped(&mut self, len: u64) {
+        crate::utils::unmapped_digest_add(&mut self.0, len);
+    }
+
+    fn finalize_hex(self: Box<Self>) -> String {
+        self.0.finalize().to_hex().to_string()
+    }
+}
+
+/// Blake2b-256 implementation
+struct Blake2b256Hasher(blake2::Blake2b<generic_array::typenum::U32>);
+
+impl FileHasher for Blake2b256Hasher {
+    fn update(&mut self, data: &[u8]) {
+        use blake2::Digest;
+        self.0.update(data);
+    }
+
+    fn update_unmapped(&mut self, len: u64) {
+        let buf = [0u8; 4096];
+        let mut remaining = len;
+        while remaining > 0 {
+            let hash_len = std::cmp::min(buf.len() as u64, remaining);
+            self.update(&buf[0..hash_len as usize]);
+            remaining -= hash_len;
+        }
+    }
+
+    fn finalize_hex(self: Box<Self>) -> String {
+        use blake2::Digest;
+        hex::encode(self.0.finalize())
+    }
+}
+
+/// Blake2b-128 implementation
+struct Blake2b128Hasher(blake2::Blake2b<generic_array::typenum::U16>);
+
+impl FileHasher for Blake2b128Hasher {
+    fn update(&mut self, data: &[u8]) {
+        use blake2::Digest;
+        self.0.update(data);
+    }
+
+    fn update_unmapped(&mut self, len: u64) {
+        let buf = [0u8; 4096];
+        let mut remaining = len;
+        while remaining > 0 {
+            let hash_len = std::cmp::min(buf.len() as u64, remaining);
+            self.update(&buf[0..hash_len as usize]);
+            remaining -= hash_len;
+        }
+    }
+
+    fn finalize_hex(self: Box<Self>) -> String {
+        use blake2::Digest;
+        hex::encode(self.0.finalize())
+    }
+}
+
+/// XxHash3-128 implementation (accumulates data since it doesn't have incremental API)
+struct XxHash3Hasher(Vec<u8>);
+
+impl FileHasher for XxHash3Hasher {
+    fn update(&mut self, data: &[u8]) {
+        self.0.extend_from_slice(data);
+    }
+
+    fn update_unmapped(&mut self, len: u64) {
+        let buf = [0u8; 4096];
+        let mut remaining = len;
+        while remaining > 0 {
+            let hash_len = std::cmp::min(buf.len() as u64, remaining);
+            self.update(&buf[0..hash_len as usize]);
+            remaining -= hash_len;
+        }
+    }
+
+    fn finalize_hex(self: Box<Self>) -> String {
+        let hash = xxhash_rust::xxh3::xxh3_128(&self.0);
+        format!("{:032x}", hash)
+    }
+}
+
+/// Murmur3-128 implementation
+struct Murmur3Hasher(fasthash::murmur3::Hasher128_x64);
+
+impl FileHasher for Murmur3Hasher {
+    fn update(&mut self, data: &[u8]) {
+        use std::hash::Hasher;
+        self.0.write(data);
+    }
+
+    fn update_unmapped(&mut self, len: u64) {
+        let buf = [0u8; 4096];
+        let mut remaining = len;
+        while remaining > 0 {
+            let hash_len = std::cmp::min(buf.len() as u64, remaining);
+            self.update(&buf[0..hash_len as usize]);
+            remaining -= hash_len;
+        }
+    }
+
+    fn finalize_hex(self: Box<Self>) -> String {
+        use fasthash::HasherExt;
+        let hash = self.0.finish_ext();
+        format!("{:032x}", hash)
+    }
+}
+
+/// Create a boxed FileHasher based on algorithm choice
+pub fn create_file_hasher(algorithm: HashAlgorithmStored) -> Box<dyn FileHasher> {
+    use blake2::Digest;
+    use fasthash::FastHasher;
+
+    match algorithm {
+        HashAlgorithmStored::Blake3_128 => Box::new(Blake2b128Hasher(blake2::Blake2b::new())),
+        HashAlgorithmStored::Blake3_256 => Box::new(Blake3Hasher(blake3::Hasher::new())),
+        HashAlgorithmStored::Blake2b256 => Box::new(Blake2b256Hasher(blake2::Blake2b::new())),
+        HashAlgorithmStored::Blake2b128 => Box::new(Blake2b128Hasher(blake2::Blake2b::new())),
+        HashAlgorithmStored::XxHash3_128 => Box::new(XxHash3Hasher(Vec::new())),
+        HashAlgorithmStored::Murmur3_128 => {
+            Box::new(Murmur3Hasher(fasthash::murmur3::Hasher128_x64::new()))
+        }
+    }
+}
 
 //-----------------------------------------
 
@@ -227,9 +370,9 @@ fn read_positional(file: &File, buf: &mut [u8], pos: u64) -> io::Result<usize> {
 
 /// Hash `len` bytes from `file` starting at `offset` into `hasher`.
 /// Returns the number of bytes actually hashed (could be < len if EOF reached).
-pub fn hash_region(
+fn hash_region(
     file: &mut File,
-    hasher: &mut blake3::Hasher,
+    hasher: &mut Box<dyn FileHasher>,
     offset: u64,
     len: u64,
 ) -> Result<u64> {
@@ -269,6 +412,7 @@ struct Packer {
     thin_id: Option<u32>,
     hash_cache_size_meg: usize,
     sync_point_secs: u64,
+    file_hash_algorithm: HashAlgorithmStored,
 }
 
 impl Packer {
@@ -285,6 +429,7 @@ impl Packer {
         thin_id: Option<u32>,
         hash_cache_size_meg: usize,
         sync_point_secs: u64,
+        file_hash_algorithm: HashAlgorithmStored,
     ) -> Self {
         Self {
             output,
@@ -298,6 +443,7 @@ impl Packer {
             thin_id,
             hash_cache_size_meg,
             sync_point_secs,
+            file_hash_algorithm,
         }
     }
 
@@ -348,7 +494,7 @@ impl Packer {
         self.output.report.progress(0);
         let start_time: DateTime<Utc> = Utc::now();
 
-        let mut input_digest = blake3::Hasher::new();
+        let mut input_digest = create_file_hasher(self.file_hash_algorithm);
 
         let mut offset = 0u64;
         let mut total_read = 0u64;
@@ -370,7 +516,7 @@ impl Packer {
                 }
                 Chunk::Unmapped(len) => {
                     assert!(len > 0);
-                    unmapped_digest_add(&mut input_digest, len);
+                    input_digest.update_unmapped(len);
                     offset += len;
                     splitter.next_break(&mut handler)?;
                     handler.handle_gap(len)?;
@@ -416,7 +562,7 @@ impl Packer {
             .complete()
             .context("error while completing the stream mappings")?;
 
-        let input_hex_digest = input_digest.finalize().to_hex().to_string();
+        let input_hex_digest = input_digest.finalize_hex();
 
         // Get mapping slab range for this stream
         let (first_mapping_slab, num_mapping_slabs) = handler.get_mapping_slab_range();
@@ -545,6 +691,7 @@ fn thick_packer(
         thin_id,
         config.hash_cache_size_meg,
         sync_point_secs,
+        config.file_hash_algorithm,
     ))
 }
 
@@ -591,6 +738,7 @@ fn thin_packer(
         thin_id,
         config.hash_cache_size_meg,
         sync_point_secs,
+        config.file_hash_algorithm,
     ))
 }
 
@@ -659,6 +807,7 @@ fn thin_delta_packer(
         thin_id,
         config.hash_cache_size_meg,
         sync_point_secs,
+        config.file_hash_algorithm,
     ))
 }
 

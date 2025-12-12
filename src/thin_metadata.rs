@@ -73,8 +73,6 @@ pub fn is_thin_device<P: AsRef<Path>>(path: P) -> Result<bool> {
     let thin_id = DevId::Name(&thin_name);
 
     // Confirm this is a thin device
-    let mut dm = DM::new()?;
-
     match get_table(&mut dm, &thin_id, "thin") {
         Ok(thin_args) => Ok(parse_thin_table(&thin_args).is_ok()),
         Err(_e) => Ok(false),

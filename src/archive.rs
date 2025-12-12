@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::cuckoo_filter::*;
-use crate::hash::*;
+use crate::hash_dispatch::{hash_64_le, Hash256};
 use crate::hash_index::*;
 use crate::iovec::*;
 use crate::paths;
@@ -90,7 +90,7 @@ pub fn build_cuckoo_from_hashes(
 
             for i in 0..hi.len() {
                 let h = hi.get(i);
-                let mini_hash = hash_le_u64(h);
+                let mini_hash = hash_64_le(h);
                 if seen.test_and_set(mini_hash, s as u32).is_err() {
                     // insertion failed -> need to grow capacity
                     capacity *= 2;
@@ -231,7 +231,7 @@ impl<'a, S: SlabStorage> Data<'a, S> {
 
         // Add entry to cuckoo filter, not checking return value as we could get indication that
         // it's "PossiblyPresent" when our logical expectation is "Inserted".
-        let key = hash_le_u64(&h);
+        let key = hash_64_le(&h);
         self.seen
             .test_and_set(key, self.current_slab)
             .or_else(|_| {
@@ -258,7 +258,7 @@ impl<'a, S: SlabStorage> Data<'a, S> {
     // Have we seen this hash before, if we have we will return the slab and offset
     // Note: This function does not modify any state
     pub fn is_known(&mut self, h: &Hash256) -> Result<Option<(u32, u32)>> {
-        let mini_hash = hash_le_u64(h);
+        let mini_hash = hash_64_le(h);
         let rc = match self.seen.test(mini_hash)? {
             // This is a possibly in set
             InsertResult::PossiblyPresent(s) => {
@@ -636,7 +636,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    fn fill_random(vec: &mut Vec<u8>) {
+    fn fill_random(vec: &mut [u8]) {
         let mut rng = rand::thread_rng();
         for byte in vec.iter_mut() {
             *byte = rng.gen();
@@ -669,7 +669,7 @@ mod tests {
 
         let data_file = MultiFile::open_for_write(archive_path, 10, slab_capacity)?;
         let hashes_file = Arc::new(Mutex::new(
-            SlabFileBuilder::open(paths::hashes_path(&archive_path))
+            SlabFileBuilder::open(paths::hashes_path(archive_path))
                 .write(true)
                 .queue_depth(16)
                 .build()
@@ -697,9 +697,8 @@ mod tests {
             for _ in 0..blocks_per_slab {
                 // We need to data random so it doesn't get de-duped
                 fill_random(&mut test_data);
-                let mut iov = IoVec::new();
-                iov.push(&test_data);
-                let h = crate::hash::hash_256(&test_data);
+                let iov = vec![&test_data[..]];
+                let h = crate::hash_dispatch::hash_256(&test_data);
                 archive.data_add_with_boundary_check(h, &iov, test_data.len() as u64)?;
             }
 
@@ -781,7 +780,7 @@ mod tests {
 
         let data_file = MultiFile::open_for_write(archive_path, 10, slab_capacity)?;
         let hashes_file = Arc::new(Mutex::new(
-            SlabFileBuilder::open(paths::hashes_path(&archive_path))
+            SlabFileBuilder::open(paths::hashes_path(archive_path))
                 .write(true)
                 .queue_depth(16)
                 .build()
@@ -801,7 +800,7 @@ mod tests {
         // 2. New file gets created
         // 3. CRASH occurs before checkpoint is written
 
-        let file1_path = file_id_to_path(&archive_path, 1);
+        let file1_path = file_id_to_path(archive_path, 1);
         std::fs::write(&file1_path, b"corrupt data that should be deleted")?;
         let mut file1_offsets = file1_path.clone();
         file1_offsets.set_extension("offsets");
@@ -875,7 +874,7 @@ mod tests {
         // Create the data and hashes files
         let data_file = MultiFile::open_for_write(archive_path, 10, slab_capacity)?;
         let hashes_file = Arc::new(Mutex::new(
-            SlabFileBuilder::open(paths::hashes_path(&archive_path))
+            SlabFileBuilder::open(paths::hashes_path(archive_path))
                 .write(true)
                 .queue_depth(16)
                 .build()
@@ -901,11 +900,10 @@ mod tests {
                 data[j * 4 + 3] = ((j >> 8) & 0xff) as u8;
             }
 
-            let hash = crate::hash::hash_256(&data);
+            let hash = crate::hash_dispatch::hash_256(&data);
             test_hashes.push(hash);
 
-            let mut iov = IoVec::new();
-            iov.push(&data);
+            let iov = vec![&data[..]];
             archive.data_add(hash, &iov, data.len() as u64)?;
         }
 
@@ -938,7 +936,7 @@ mod tests {
 
         // Test 2: Verify all hashes are in the filter
         for (i, hash) in test_hashes.iter().enumerate() {
-            let mini_hash = hash_le_u64(hash);
+            let mini_hash = hash_64_le(hash);
             let result = filter.test(mini_hash)?;
             assert!(
                 matches!(
@@ -964,7 +962,7 @@ mod tests {
 
         // All hashes should still be present after resizing
         for (i, hash) in test_hashes.iter().enumerate() {
-            let mini_hash = hash_le_u64(hash);
+            let mini_hash = hash_64_le(hash);
             let result = filter_resized.test(mini_hash)?;
             assert!(
                 matches!(
