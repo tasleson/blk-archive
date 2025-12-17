@@ -3,13 +3,13 @@ use clap::ArgMatches;
 use std::process::exit;
 use std::sync::Arc;
 
+use blk_stash::config;
 use blk_stash::create;
 use blk_stash::dump_stream;
 use blk_stash::list;
 use blk_stash::output::Output;
 use blk_stash::pack;
-use blk_stash::recovery::confirm_data_loss_warning;
-use blk_stash::recovery::flight_check;
+use blk_stash::recovery::{confirm_data_loss_warning, flight_check};
 use blk_stash::unpack;
 use blk_stash::utils::mk_output;
 
@@ -54,6 +54,13 @@ fn main_() -> Result<()> {
     // and cleaning up indexs, cuckoo filters etc.
     if let Some((subcommand_name, sub_matches)) = matches.subcommand() {
         if let Some(archive_path) = sub_matches.get_one::<String>("ARCHIVE") {
+            // We have an archive we need to read it up which will initialize hash functions
+            // we will ignore errors here as the archive might not even exist yet
+            let c = config::read_config(archive_path, &matches);
+            if c.is_err() {
+                eprintln!("read_config error, does this look legit? {:?}", c);
+            }
+
             // Do a preflight check before proceeding to ensure the archive is in a hopefully
             // good state (skip for create command as archive doesn't exist yet)
             if subcommand_name != "create" && std::env::var("BLK_STASH_DEVEL_SKIP_DATA").is_err() {
