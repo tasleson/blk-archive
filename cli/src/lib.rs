@@ -9,7 +9,7 @@ pub fn build_cli() -> clap::Command {
         .short('a')
         .value_name("ARCHIVE")
         .num_args(1)
-        .env("BLK_ARCHIVE_DIR")
+        .env("BLK_STASH_DIR")
         .required(true)
         .help_heading("Required Options");
 
@@ -40,10 +40,10 @@ pub fn build_cli() -> clap::Command {
         .num_args(1)
         .help_heading("Optional Options");
 
-    command!("blk-archive")
+    command!("blk-stash")
         .version(env!("CARGO_PKG_VERSION"))
         .propagate_version(true)
-        .bin_name("blk-archive")
+        .bin_name("blk-stash")
         .disable_help_flag(true)
         .disable_version_flag(true)
         .subcommand_required(true)

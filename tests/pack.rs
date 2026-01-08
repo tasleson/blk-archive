@@ -3,8 +3,8 @@ use rand::Rng;
 
 mod common;
 
-use blk_archive::archive;
-use common::blk_archive::PackResponse;
+use blk_stash::archive;
+use common::blk_stash::PackResponse;
 use common::fixture::{create_archive, create_input_file, BLOCK_SIZE};
 use common::random::Pattern;
 use common::test_dir::*;
