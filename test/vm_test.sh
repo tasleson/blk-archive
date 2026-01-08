@@ -37,11 +37,11 @@ fi
 # Create the block devices
 truncate -s 1T /block1.img || exit 1
 truncate -s 1T /block2.img || exit 1
-truncate -s 1T /block3.img || exit 1
+#truncate -s 1T /block3.img || exit 1
 
 loop1=$(losetup -f --show /block1.img)
 loop2=$(losetup -f --show /block2.img)
-loop3=$(losetup -f --show /block3.img)
+#loop3=$(losetup -f --show /block3.img)
 
 # Run the cargo based tests
 cd "$START_DIR" || exit 1
@@ -59,10 +59,20 @@ echo "disable_by_id_check = true" >> config.toml
 
 export DMTEST_RESULT_SET=unit-test
 ./dmtest health || exit 1
-./dmtest run blk-slash/unit/combinations
+
+echo "Running the dmtest blk-stash tests..."
+./dmtest run blk-stash/unit/combinations
 rc=$?
+
+echo "dmtest exit code is $rc"
+
+echo "dumping logs (always)"
+./dmtest log /blk-stash/unit/combinations
+
 if [ $rc -ne 0 ]; then
-    ./dmtest log /blk-slash/unit/combinations
+    echo "dmtest failed! (why didn't we catch this before)"
+    #./dmtest log /blk-stash/unit/combinations
     exit 1
 fi
+
 exit 0
