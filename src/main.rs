@@ -3,12 +3,12 @@ use std::process::exit;
 use std::sync::Arc;
 use thinp::report::*;
 
-use blk_archive::create;
-use blk_archive::dump_stream;
-use blk_archive::list;
-use blk_archive::output::Output;
-use blk_archive::pack;
-use blk_archive::unpack;
+use blk_stash::create;
+use blk_stash::dump_stream;
+use blk_stash::list;
+use blk_stash::output::Output;
+use blk_stash::pack;
+use blk_stash::unpack;
 
 //-----------------------
 
