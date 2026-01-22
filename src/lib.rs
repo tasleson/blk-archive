@@ -1,10 +1,12 @@
 pub mod archive;
+pub mod cdc;
 pub mod chunkers;
 pub mod config;
 pub mod content_sensitive_splitter;
 pub mod create;
 pub mod cuckoo_filter;
 pub mod dump_stream;
+pub mod gearhash_stream;
 pub mod hash;
 pub mod hash_index;
 pub mod iovec;
@@ -24,4 +26,5 @@ pub mod stream_metadata;
 pub mod thin_metadata;
 pub mod unpack;
 pub mod utils;
+pub mod vecdeque_reader;
 pub mod version;
